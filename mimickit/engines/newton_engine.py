@@ -479,9 +479,16 @@ class NewtonEngine(engine.Engine):
         return cam_dir
     
     def render(self):
+        if (not self._viewer.is_running()):
+            raise SystemExit(0)
+
         sim_time = self.get_sim_time()
 
         self._viewer.end_frame()
+        # Window events can destroy the GL context during end_frame().
+        if (not self._viewer.is_running()):
+            raise SystemExit(0)
+
         self._viewer.begin_frame(sim_time)
         self._viewer.log_state(self._sim_state.raw_state)
 

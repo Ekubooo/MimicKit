@@ -131,6 +131,12 @@ def run(rank, num_procs, device, master_port, args):
 
     return
 
+def _run_worker(*args):
+    try:
+        run(*args)
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+
 def main(argv):
     root_rank = 0
     args = load_args(argv)
@@ -147,19 +153,34 @@ def main(argv):
     torch.multiprocessing.set_start_method("spawn")
 
     processes = []
-    for rank in range(1, num_workers):
-        curr_device = devices[rank]
-        proc = torch.multiprocessing.Process(target=run, args=[rank, num_workers, curr_device, master_port, args])
-        proc.start()
-        processes.append(proc)
-    
-    root_device = devices[0]
-    run(root_rank, num_workers, root_device, master_port, args)
+    try:
+        for rank in range(1, num_workers):
+            curr_device = devices[rank]
+            proc = torch.multiprocessing.Process(target=_run_worker, args=[rank, num_workers, curr_device, master_port, args])
+            proc.start()
+            processes.append(proc)
 
-    for proc in processes:
-        proc.join()
+        root_device = devices[0]
+        run(root_rank, num_workers, root_device, master_port, args)
+
+        for proc in processes:
+            proc.join()
+    finally:
+        # A viewer exit or interrupt must not leave workers blocked in collectives.
+        for proc in processes:
+            if (proc.is_alive()):
+                proc.terminate()
+        for proc in processes:
+            proc.join(timeout=5)
+            if (proc.is_alive()):
+                proc.kill()
+                proc.join()
        
     return
 
 if __name__ == "__main__":
-    main(sys.argv)
+    try:
+        main(sys.argv)
+    except KeyboardInterrupt:
+        Logger.print("Interrupted. Exiting.")
+        sys.exit(130)
