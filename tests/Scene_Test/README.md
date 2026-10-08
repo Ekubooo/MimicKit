@@ -33,7 +33,7 @@ python tests/Scene_Test/creator1.py --terrain wave
 # 选择一种地形
 python tests/Scene_Test/creator1.py --terrain pyramid_stairs
 
-# 一次生成全部七种类型，各自保存为一个 OBJ
+# 显式调用七种独立生成函数，各自保存为一个 OBJ
 python tests/Scene_Test/creator1.py --terrain all
 
 # 使用 Z-up，并固定随机种子
@@ -48,13 +48,59 @@ python tests/Scene_Test/creator1.py --help
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `--terrain` | `wave` | 七种内置类型之一；`all` 导出全部类型 |
+| `--terrain` | `wave` | 七种内置类型之一，或 `all` 分别导出全部七种 |
 | `--up-axis` | `Y` | `Y` 或 `Z`，也接受小写 |
 | `--seed` | 不固定 | 控制 `random_grid` 的随机布局 |
-| `--heightfield` | 不读取文件 | 仅用于 `heightfield` 或 `all`；文件路径相对于运行目录 |
-| `--ground-z` | 最低地表高度减 0.3 米 | 仅用于 `heightfield` 或 `all`；底面必须低于最低地表 |
+| `--heightfield` | 不读取文件 | 用于 `heightfield` 或 `all`；文件路径相对于运行目录 |
+| `--ground-z` | 最低地表高度减 0.3 米 | 用于 `heightfield` 或 `all`；底面必须低于最低地表 |
 
-`heightfield` 未传数组时，脚本会提供一张 30×30 的全零浮点高度图，生成 0.3 米厚的平整地板。这是 CLI 的预设；生成器本身不传高度图时仍返回无厚度平面。除波浪保留原脚本参数外，其余类型采用生成器默认参数。修改 `BLOCK_SIZE` 可调整所有类型的尺寸，修改 `terrain_params` 可设置下面列出的类型参数。
+`heightfield` 未传数组时，脚本会生成一张 41×31 的浮点高度图，包含一处隆起和一处凹坑，四周平滑衰减到零高度。底面位于最低地表下方 0.3 米，并连接侧壁。这是 CLI 的示例预设；生成器本身不传高度图时仍返回无厚度平面。波浪保留原脚本参数，其余五种类型的参数值与生成器默认值一致。
+
+当前 `generate_heightfield()` 保留 `grid_size=(6, 6)`：同一张高度图重复排列 36 块，每块 6×4 米，整体为 36×24 米。只想看一处隆起和凹坑时，将该函数中的 `grid_size` 改为 `(1, 1)`。
+
+默认高度图的可调参数：
+
+| 参数 | 当前值 | 观察效果 |
+|---|---|---|
+| `resolution_x`、`resolution_y` | `41`、`31` | 每轴采样点数；越大曲面越细 |
+| `hill_height` | `1.0` 米 | 隆起强度；经过边缘衰减后实际峰值稍低 |
+| `pit_depth` | `0.6` 米 | 凹坑强度；越大凹陷越深 |
+| `hill_radius`、`pit_radius` | `0.18`、`0.16` | 相对于块尺寸的宽度比例 |
+| `hill_center` | `(0.35, 0.45)` | 隆起中心在块长宽中的相对位置 |
+| `pit_center` | `(0.70, 0.60)` | 凹坑中心在块长宽中的相对位置 |
+
+这些参数放在 `generate_heightfield()` 内，用来构造示例数组；它们不是原始 Newton API 的参数。提供 `--heightfield` 文件时使用文件中的高度，不使用上述示例。
+
+### 每种地形的代码在哪里？
+
+`creator1.py` 为每种地形提供独立函数，各自直接写出 `grid_size`、`block_size`、类型名和对应参数。每个参数旁均有注释，解释控制的形状、方向、单位或取值含义。修改某种地形时，直接修改该函数中的数值即可。
+
+| 类型 | 生成函数 | 参数位置 |
+|---|---|---|
+| `flat` | `generate_flat()` | 高度 `height` |
+| `pyramid_stairs` | `generate_pyramid_stairs()` | 台阶宽度、高度增量、平台宽度 |
+| `random_grid` | `generate_random_grid(seed=None)` | 格子宽度、高度范围、随机种子 |
+| `wave` | `generate_wave()` | 波浪幅度、频率、采样点数 |
+| `box` | `generate_box()` | 平台高度、宽度 |
+| `gap` | `generate_gap()` | 间隔宽度、平台宽度 |
+| `heightfield` | `generate_heightfield(heightfield_path=None, ground_z=None)` | 高度数组、中心位置、底面高度 |
+
+选择器 `select_generator(类型名)` 返回对应函数，单种地形生成函数返回 `(vertices, indices)`；`export_mesh()` 负责向上轴转换和保存。`all` 对应 `generate_all()`，内部显式调用七种函数，不使用生成循环，分别导出并返回七个文件路径。各类型参数仍在各自的生成函数中修改。
+
+也可以从本目录的其他 Python 脚本直接调用：
+
+```python
+from creator1 import generate_wave, select_generator, export_mesh
+
+# 直接使用指定生成函数
+vertices, indices = generate_wave()
+output_path = export_mesh("wave", vertices, indices, up_axis="Y")
+
+# 或通过选择器获取函数；仅选择时不会生成资产
+generator = select_generator("pyramid_stairs")
+vertices, indices = generator()
+output_path = export_mesh("pyramid_stairs", vertices, indices, up_axis="Y")
+```
 
 ## 目录、依赖与处理流程
 
@@ -62,6 +108,7 @@ python tests/Scene_Test/creator1.py --help
 Scene_Test/
 ├── terrain_generator.py   # 生成器源码
 ├── creator1.py            # CLI、坐标转换、资产导出
+├── scene_creator.py       # 独立的阶梯 + OBJ 放置与拼接示例
 ├── README.md              # 本指南
 └── Assets/
     ├── wave.obj           # 波浪资产
@@ -452,6 +499,42 @@ vertices, indices = create_mesh_terrain(
 当前实现按 `terrain_name` 查找参数，因此自定义函数应作为字典键，而不是其名称字符串。自定义函数需要自行管理随机种子。
 
 ## 导入 OBJ，拼接成场景资产
+
+### 直接运行独立场景脚本
+
+`scene_creator.py` 直接使用 `terrain_generator.py`，不依赖 `creator1.py`。它生成一块 6×4 米的上升阶梯，将 OBJ 放到中心平台，并导出几何到 `Assets/stairs_scene.obj`；同名输出覆盖。
+
+当前默认模型为本目录 `Assets/bunny.obj`，在仓库根目录运行：
+
+```powershell
+python tests/Scene_Test/scene_creator.py
+
+# 或指定自己的 OBJ 路径；相对路径以运行目录为基准。
+python tests/Scene_Test/scene_creator.py --obj "D:/Models/chair.obj" --scale 1 --obj-up-axis Z
+
+# 假设模型单位为厘米、向上轴为 Y，并在地面上旋转 90 度。
+python tests/Scene_Test/scene_creator.py --obj "D:/Models/chair.obj" --scale 0.01 --obj-up-axis Y --yaw 90
+
+# 手动指定 OBJ 底部中心的位置；此处采用 Z-up，Z 应匹配该处台阶高度。
+python tests/Scene_Test/scene_creator.py --position 1.0 2.0 0.1
+```
+
+不提供 `--position` 时，OBJ 的包围盒底部中心自动对齐中央平台，约为 `(3, 2, 0.4)` 米。平台大小为 1×1 米，放置前可调整 `--scale` 使物体尺寸合适。输出默认 Y-up，可以用 `--up-axis Z` 保留 Z-up。放置坐标始终按 Z-up 填写，与输出向上轴无关。
+
+当前 `bunny.obj` 原始向上轴是 Y，尺寸约 `0.155×0.154×0.120`。脚本默认 `--obj-up-axis Y --scale 5`，先转成 Z-up，再放大并摆放；放置后的宽、深、高约为 `0.776×0.602×0.768` 米。脚本顶部的 `DEFAULT_OBJ_SCALE` 和 `DEFAULT_OBJ_UP_AXIS` 方便直接调整默认值。更换模型后，应按该模型的单位和向上轴显式设置这两个 CLI 参数；OBJ 文件本身不记录统一的单位和向上轴。
+
+脚本按步骤拆成函数：
+
+| 函数 | 作用 |
+|---|---|
+| `generate_stairs()` | 独立生成阶梯；在这里修改阶梯尺寸、台阶参数 |
+| `load_and_place_obj()` | 导入 OBJ，统一向上轴，缩放、旋转，再对齐底部中心 |
+| `combine_meshes()` | 追加顶点和三角面，并调整 OBJ 面的顶点编号 |
+| `create_scene()` | 依次执行上述步骤，转换整个场景的向上轴并导出 |
+
+数组操作旁附有中文注释：顶点数组每行是 `[x, y, z]`；面数组每行是三个顶点编号。OBJ 的顶点接在地形顶点后面，所以 OBJ 的面索引必须加上地形顶点数。这个示例只拼接几何，不执行实体布尔并集或保留完整的材质与纹理。
+
+### 手动拼接片段
 
 以下片段接在已经创建 `mesh` 的代码后，且在整个场景转 Y-up 之前运行。示例假设 OBJ 也采用 Z-up，尺寸单位已统一为米。
 
