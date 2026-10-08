@@ -1,4 +1,4 @@
-"""通过 CLI 生成地形，保存到 Assets/<地形类型>.obj，同名文件覆盖。"""
+"""通过 CLI 生成地形，保存到 Assets/procedural/<地形类型>.obj，同名文件覆盖。"""
 
 import argparse
 from pathlib import Path
@@ -10,6 +10,7 @@ from terrain_generator import create_mesh_terrain
 
 
 ASSET_DIR = Path(__file__).resolve().parent / "Assets"
+OUTPUT_DIR = ASSET_DIR / "procedural"  # 纯程序化地形资产。
 
 
 def generate_flat():
@@ -178,7 +179,7 @@ def select_generator(terrain_type):
 
 
 def export_mesh(terrain_type, vertices, indices, up_axis="Y"):
-    """统一转换坐标并导出，覆盖 Assets/<类型名>.obj，返回文件路径。
+    """统一转换坐标并导出，覆盖 Assets/procedural/<类型名>.obj，返回文件路径。
 
     terrain_type：决定输出文件名，如 wave 对应 wave.obj。
     vertices：生成器返回的 (N, 3) 顶点数组，采用 Z-up 坐标。
@@ -196,8 +197,8 @@ def export_mesh(terrain_type, vertices, indices, up_axis="Y"):
         mesh.apply_transform(
             trimesh.transformations.rotation_matrix(-np.pi / 2, [1, 0, 0])
         )
-    ASSET_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = ASSET_DIR / f"{terrain_type}.obj"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = OUTPUT_DIR / f"{terrain_type}.obj"
     mesh.export(output_path)
     return output_path
 

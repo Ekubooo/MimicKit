@@ -10,6 +10,7 @@
 - [七种地形参数速查](#全部内置地形参数速查)
 - [常用示例](#常用完整示例)
 - [导入 OBJ](#导入-obj拼接成场景资产)
+- [SDF 烘焙与重建](#sdf-烘焙与重建)
 - [输出格式](#输出格式速查)
 - [全部辅助函数](#内部函数完整索引)
 - [常见问题](#常见问题速查)
@@ -23,7 +24,7 @@ conda activate mimickit-newton
 python tests/Scene_Test/creator1.py --terrain wave
 ```
 
-当前输出为 **`tests/Scene_Test/Assets/<类型名>.obj`**，例如 `wave.obj`。同一类型重复运行会覆盖原文件，不会添加编号。输出路径相对于脚本定位，因此从其他工作目录运行也会写入同一个 Assets 目录。
+当前输出为 **`tests/Scene_Test/Assets/procedural/<类型名>.obj`**，例如 `wave.obj`。同一类型重复运行会覆盖原文件，不会添加编号。输出路径相对于脚本定位，因此从其他工作目录运行也会写入同一个分类目录。
 
 当前脚本生成一块 6×4 米的波浪地形，幅度为 0.75 米，每个方向有 30 个采样点；导出默认采用 **Y-up**。脚本不启动查看器。
 
@@ -108,17 +109,23 @@ output_path = export_mesh("pyramid_stairs", vertices, indices, up_axis="Y")
 Scene_Test/
 ├── terrain_generator.py   # 生成器源码
 ├── creator1.py            # CLI、坐标转换、资产导出
-├── scene_creator.py       # 独立的阶梯 + OBJ 放置与拼接示例
+├── scene_creator.py       # 独立的阶梯 + OBJ 放置与布尔并集示例
+├── repair_bunny.py        # 单独补 bunny 底部开口并另存副本
+├── sdf_baker.py           # 读取布尔 mesh、烘焙 SDF、重建和导出切片
 ├── README.md              # 本指南
 └── Assets/
-    ├── wave.obj           # 波浪资产
-    └── <类型名>.obj       # 其他类型的资产
+    ├── origin/           # bunny、奶牛等导入模型，以及 bunny 修复副本
+    ├── procedural/       # wave.obj 等纯程序化地形
+    ├── output/           # 拼接/布尔场景、SDF、重建 OBJ、切片 PNG
+    └── .warp_cache/      # Warp 编译缓存
 ```
 
 | 部分 | 依赖 | 作用 |
 |---|---|---|
 | `terrain_generator.py` | NumPy；标准库 `typing` | 生成几何、排列地形块、拼接索引 |
 | `creator1.py` | NumPy、Trimesh；标准库 `pathlib`、`argparse` | CLI、生成 mesh、旋转、写文件 |
+| `scene_creator.py` / `repair_bunny.py` | NumPy、Trimesh、manifold3d | 实体布尔 / bunny 局部补洞 |
+| `sdf_baker.py` | NumPy、Trimesh、Warp、Matplotlib；CUDA | SDF 烘焙、保存、重建和切片 |
 
 独立使用生成器时不需要导入 Newton，也不需要 Warp、CUDA 或物理求解器。源码文件内已包含所有辅助函数；若复制或分发该文件，请保留原有 Apache-2.0 许可声明。
 
@@ -410,7 +417,7 @@ terrain_params={
 
 ## 常用完整示例
 
-### 单块地形，保存到 Assets
+### 单块地形，保存到 Assets/procedural
 
 ```python
 from pathlib import Path
@@ -428,7 +435,7 @@ mesh = trimesh.Trimesh(vertices, indices.reshape(-1, 3), process=False)
 
 # 需要 Y-up 时旋转；需要 Z-up 时省略这行。
 mesh.apply_transform(trimesh.transformations.rotation_matrix(-np.pi / 2, [1, 0, 0]))
-output = Path(__file__).resolve().parent / "Assets" / "terrain.obj"
+output = Path(__file__).resolve().parent / "Assets" / "procedural" / "terrain.obj"
 output.parent.mkdir(parents=True, exist_ok=True)
 mesh.export(output)
 ```
@@ -498,16 +505,24 @@ vertices, indices = create_mesh_terrain(
 
 当前实现按 `terrain_name` 查找参数，因此自定义函数应作为字典键，而不是其名称字符串。自定义函数需要自行管理随机种子。
 
-## 导入 OBJ，拼接成场景资产
+## 导入 OBJ，生成布尔场景资产
 
 ### 直接运行独立场景脚本
 
-`scene_creator.py` 直接使用 `terrain_generator.py`，不依赖 `creator1.py`。它生成一块 6×4 米的上升阶梯，将 OBJ 放到中心平台，并导出几何到 `Assets/stairs_scene.obj`；同名输出覆盖。
+`scene_creator.py` 直接使用 `terrain_generator.py`，不依赖 `creator1.py`。它生成一块 6×4 米的上升阶梯，将 OBJ 放到中心平台，使用 Trimesh + Manifold 做实体布尔并集。`Assets/output/stairs_scene.obj` 是同位置的拼接对照，`Assets/output/stairs_scene_bool.obj` 是成功完成布尔后的结果；同名输出覆盖。
 
-当前默认模型为本目录 `Assets/bunny.obj`，在仓库根目录运行：
+当前 `mimickit-newton` 环境已验证 Trimesh 5.1.1 + manifold3d 3.5.4 可执行布尔并集。其他环境需要 `python -m pip install trimesh manifold3d numpy`。脚本先检查后端，不可用时立即停止。
+
+**bunny 修复副本：** 原始 `Assets/origin/bunny.obj` 底部附近有 4 个开口，共 42 条边界边。独立运行 `repair_bunny.py` 会添加 34 个补洞三角形，另存为 `Assets/origin/bunny_repaired.obj`，保留原始文件。补面采用开口轮廓三角化，保留原有三维顶点和表面；副本已通过封闭性和 Manifold 输入检查。场景脚本不自动补洞或重建；原始 bunny 即使将洞埋入平台仍不能作 Manifold 输入，`check_volume=False` 也不能绕过这一要求。
+
+当前默认模型为本目录 `Assets/origin/spot_triangulated_good.obj` 奶牛，在仓库根目录运行：
 
 ```powershell
 python tests/Scene_Test/scene_creator.py
+
+# 单独修复 bunny，并用修复副本测试场景。
+python tests/Scene_Test/repair_bunny.py
+python tests/Scene_Test/scene_creator.py --obj tests/Scene_Test/Assets/origin/bunny_repaired.obj --scale 5 --obj-up-axis Y
 
 # 或指定自己的 OBJ 路径；相对路径以运行目录为基准。
 python tests/Scene_Test/scene_creator.py --obj "D:/Models/chair.obj" --scale 1 --obj-up-axis Z
@@ -515,13 +530,16 @@ python tests/Scene_Test/scene_creator.py --obj "D:/Models/chair.obj" --scale 1 -
 # 假设模型单位为厘米、向上轴为 Y，并在地面上旋转 90 度。
 python tests/Scene_Test/scene_creator.py --obj "D:/Models/chair.obj" --scale 0.01 --obj-up-axis Y --yaw 90
 
-# 手动指定 OBJ 底部中心的位置；此处采用 Z-up，Z 应匹配该处台阶高度。
+# 调整自动放置时的下沉深度，单位为米；0 表示与顶面齐平。
+python tests/Scene_Test/scene_creator.py --sink 0.02
+
+# 手动指定 OBJ 底部中心的位置；此处采用 Z-up，不再叠加 --sink。
 python tests/Scene_Test/scene_creator.py --position 1.0 2.0 0.1
 ```
 
-不提供 `--position` 时，OBJ 的包围盒底部中心自动对齐中央平台，约为 `(3, 2, 0.4)` 米。平台大小为 1×1 米，放置前可调整 `--scale` 使物体尺寸合适。输出默认 Y-up，可以用 `--up-axis Z` 保留 Z-up。放置坐标始终按 Z-up 填写，与输出向上轴无关。
+不提供 `--position` 时，OBJ 的包围盒底部中心放在中央平台，并默认下沉 0.02 米，约为 `(3, 2, 0.38)` 米。平台顶面约为 0.4 米，大小为 1×1 米。奶牛四只脚均与平台相交；实际求交得到四块正体积区域，整体并集是一个封闭连通网格。可用 `--sink` 控制嵌入深度；显式 `--position` 是最终底部中心坐标，不再叠加下沉。输出默认 Y-up，可以用 `--up-axis Z` 保留 Z-up。放置坐标始终按 Z-up 填写，与输出向上轴无关。
 
-当前 `bunny.obj` 原始向上轴是 Y，尺寸约 `0.155×0.154×0.120`。脚本默认 `--obj-up-axis Y --scale 5`，先转成 Z-up，再放大并摆放；放置后的宽、深、高约为 `0.776×0.602×0.768` 米。脚本顶部的 `DEFAULT_OBJ_SCALE` 和 `DEFAULT_OBJ_UP_AXIS` 方便直接调整默认值。更换模型后，应按该模型的单位和向上轴显式设置这两个 CLI 参数；OBJ 文件本身不记录统一的单位和向上轴。
+当前奶牛原始向上轴是 Y，原始 X/Y/Z 尺寸约 `0.943×1.690×1.718`。脚本默认 `--obj-up-axis Y --scale 0.5`，转成 Z-up 后，宽、深、高约为 `0.472×0.859×0.845` 米，完整落在中央平台范围内。脚本顶部的 `DEFAULT_OBJ_SCALE`、`DEFAULT_OBJ_UP_AXIS` 和 `DEFAULT_OBJ_SINK` 可以调整默认大小、朝向和嵌入深度。换用修复后的 bunny 时应显式设置 `--scale 5 --obj-up-axis Y`；OBJ 文件本身不记录统一的单位和向上轴。
 
 脚本按步骤拆成函数：
 
@@ -530,9 +548,61 @@ python tests/Scene_Test/scene_creator.py --position 1.0 2.0 0.1
 | `generate_stairs()` | 独立生成阶梯；在这里修改阶梯尺寸、台阶参数 |
 | `load_and_place_obj()` | 导入 OBJ，统一向上轴，缩放、旋转，再对齐底部中心 |
 | `combine_meshes()` | 追加顶点和三角面，并调整 OBJ 面的顶点编号 |
-| `create_scene()` | 依次执行上述步骤，转换整个场景的向上轴并导出 |
+| `prepare_solid()` | 仅焊接同位置的重复顶点，不补洞或修复几何 |
+| `union_stair_boxes()` | 按当前生成器每箱体 12 个连续三角形恢复独立箱体，焊接后做地形并集 |
+| `boolean_union_meshes()` | 检查实体封闭性，再调用 Manifold 做并集并验证输出 |
+| `simplify_mesh_manifold()` | 对最终布尔实体副本做小容差简化；使用 Mesh64，不平滑或补洞 |
+| `report_simplification()` | 比较三角形数、最小角、瘦长面、封闭性、连通性和体积 |
+| `validate_output_paths()` | 导出前拒绝输入和不同输出指向同一文件 |
+| `export_scene_mesh()` | 转换整个场景的向上轴并导出 |
+| `check_boolean_backend()` | 检查当前 Python 环境中的 Manifold 后端 |
+| `create_scene()` | 保存摆放对照和原布尔结果，可选简化分支另存 OBJ；返回原布尔路径 |
 
-数组操作旁附有中文注释：顶点数组每行是 `[x, y, z]`；面数组每行是三个顶点编号。OBJ 的顶点接在地形顶点后面，所以 OBJ 的面索引必须加上地形顶点数。这个示例只拼接几何，不执行实体布尔并集或保留完整的材质与纹理。
+数组操作旁附有中文注释：顶点数组每行是 `[x, y, z]`；面数组每行是三个顶点编号。拼接对照只追加数组，保留内部面；布尔输出则裁剪相交部分，删除并集内部面。布尔需要输入为有效封闭实体，不保留完整材质与纹理，也不会自动填补实际存在的物体间隙。
+
+### 可选 Manifold 小容差简化
+
+默认关闭。启用后先保存原布尔结果，再对其副本调用 `Manifold.simplify()`，**不会用简化结果替换原布尔文件**。三个默认输出为：
+
+| 结果 | 默认文件 |
+|---|---|
+| 原始拼接对照 | `Assets/output/stairs_scene.obj` |
+| 原布尔并集 | `Assets/output/stairs_scene_bool.obj` |
+| 可选简化副本 | `Assets/output/stairs_scene_bool_simplified.obj` |
+
+```powershell
+# 开启：默认表面容差为 0.001 米（1 毫米）。
+python tests/Scene_Test/scene_creator.py --simplify
+
+# 使用更小的 0.0001 米（0.1 毫米）容差。
+python tests/Scene_Test/scene_creator.py --simplify --simplify-tolerance 0.0001
+
+# 显式关闭；未提供 --simplify 时也默认关闭。
+python tests/Scene_Test/scene_creator.py --no-simplify
+
+# 自定义原输出，简化文件自动派生为 Assets/output/custom_bool_simplified.obj。
+python tests/Scene_Test/scene_creator.py --simplify --output tests/Scene_Test/Assets/output/custom_bool.obj
+
+# 或显式指定另一份独立简化 OBJ。
+python tests/Scene_Test/scene_creator.py --simplify --simplified-output tests/Scene_Test/Assets/output/custom_simplified.obj
+
+# 按需使用简化副本烘焙；SDF 默认输入仍是原布尔结果。
+python tests/Scene_Test/sdf_baker.py --input tests/Scene_Test/Assets/output/stairs_scene_bool_simplified.obj
+```
+
+| 参数 | 默认值 | 作用 |
+|---|---|---|
+| `--simplify` / `--no-simplify` | 关闭 | 控制独立简化分支；关闭时不调用简化、不更新简化文件 |
+| `--simplify-tolerance` | `0.001` 米 | 允许的表面容差，必须是有限正值；仅开启时使用，不是目标面数 |
+| `--simplified-output` | 原布尔输出文件名追加 `_simplified` | 简化副本路径；只能与开启分支一起使用 |
+
+输入和所有输出在写文件前检查互不覆盖，包括相对路径别名、符号链接和硬链接。各输出可以覆盖自己的上次结果，但不能指向输入或另一种输出。未开启分支却指定 `--simplified-output` 会报错；开启时容差小于 Manifold 实体实际最小容差也会明确报错，不会自动放大容差。
+
+简化使用 `Mesh64 → Manifold.simplify() → to_mesh64()`，避免额外的 float32 转换损失，原 mesh 不被修改。它允许表面在容差内变化，不保证得到均匀三角形或消除全部瘦长面，也不做全局平滑、补洞或重网格。终端同时报告两份实体的三角形数、最小内角、小于 1° 的面数、封闭性、连通分量和体积变化；体积变化不能代替距离误差。
+
+简化失败时原布尔输出仍保留，并明确报错。已有简化文件不会被主动删除，因此失败后同名文件可能是上次的结果。原件和简化副本采用相同的输出向上轴。
+
+回归验证：`python -m unittest discover -s tests/Scene_Test -p test_scene_creator.py`。
 
 ### 手动拼接片段
 
@@ -540,7 +610,7 @@ python tests/Scene_Test/scene_creator.py --position 1.0 2.0 0.1
 
 ```python
 asset_dir = Path(__file__).resolve().parent / "Assets"
-obj = trimesh.load(asset_dir / "input.obj", force="mesh")
+obj = trimesh.load(asset_dir / "origin" / "input.obj", force="mesh")
 obj.apply_scale(1.0)
 obj.apply_translation([2.0, 1.0, 0.5])  # 按实际原点和尺寸调整
 scene_mesh = trimesh.util.concatenate([mesh, obj])
@@ -549,10 +619,78 @@ scene_mesh = trimesh.util.concatenate([mesh, obj])
 scene_mesh.apply_transform(
     trimesh.transformations.rotation_matrix(-np.pi / 2, [1, 0, 0])
 )
-scene_mesh.export(asset_dir / "scene.obj")
+(asset_dir / "output").mkdir(parents=True, exist_ok=True)
+scene_mesh.export(asset_dir / "output" / "scene.obj")
 ```
 
 这一步将多个几何拼为一个网格资产，不会裁剪到长方体范围、自动贴地、修补孔洞或处理相交实体的布尔并集。若要保留复杂多材质和场景层级，应另用 Trimesh Scene 等场景表示。
+
+## SDF 烘焙与重建
+
+`sdf_baker.py` 独立读取已有布尔 mesh，不依赖场景创建脚本，也不启动 viewer。使用当前 `mimickit-newton` 环境的 Warp、Trimesh、NumPy、Matplotlib；需要 CUDA。
+
+```powershell
+conda activate mimickit-newton
+python tests/Scene_Test/sdf_baker.py
+
+# 自选封闭资产、采样精度和水平切片高度；单位均为米。
+python tests/Scene_Test/sdf_baker.py --input tests/Scene_Test/Assets/output/stairs_scene_bool.obj --voxel-size 0.01 --slice-height 0.41
+```
+
+| 参数 | 默认值 | 控制内容 |
+|---|---|---|
+| `--input` | `Assets/output/stairs_scene_bool.obj` | 已经生成的封闭布尔 mesh，保持原文件不变 |
+| `--voxel-size` | `0.01` | 距离采样点间距；越小越细，三维网格内存约按其倒数的三次方增加 |
+| `--padding` | `0.05` | 包围盒每侧外扩，至少为采样间距的两倍，避免重建表面被边界裁开 |
+| `--output-dir` | 脚本所在目录的 `Assets/output` | 输出目录，文件名由输入文件名派生，同名覆盖 |
+| `--device` | `cuda:0` | CUDA 设备；不可用时停止，不自动改为 CPU |
+| `--up-axis` | `Y` | 输入坐标的向上轴；只用于元数据和切片，不旋转模型 |
+| `--slice-height` | `0.41` | 水平切片沿向上轴的高度；当前平台约高 0.4 米 |
+
+默认在 `Assets/output` 保存四份结果：
+
+| 文件 | 如何使用 |
+|---|---|
+| `stairs_scene_bool_sdf.npz` | 完整 float32 距离数组和坐标元数据；方便 NumPy 读取与分析 |
+| `stairs_scene_bool_sdf.nvdb` | NanoVDB SDF，可重新加载为 `wp.Volume`；查看器需支持 NanoVDB，不能假定普通 OBJ 查看器能打开 |
+| `stairs_scene_bool_sdf_reconstructed.obj` | 从同一份 SDF 的零等值面提取的重建 mesh，使用现有 OBJ 查看器打开 |
+| `stairs_scene_bool_sdf_slices.png` | 三方向切片：红色为内部负距离，蓝色为外部正距离，黑线为零等值线 |
+
+### 读取保存的 SDF
+
+```python
+import numpy as np
+import warp as wp
+from pathlib import Path
+
+asset_root = Path("tests/Scene_Test/Assets")  # 示例从仓库根目录运行。
+assets = asset_root / "output"
+with np.load(assets / "stairs_scene_bool_sdf.npz", allow_pickle=False) as data:
+    values = data["values"]       # [X编号, Y编号, Z编号]，不会因 up-axis 换序。
+    origin = data["origin"]       # 数组 [0,0,0] 的世界位置。
+    spacing = float(data["voxel_size"])
+    # values[i,j,k] 对应 origin + spacing * [i,j,k]；单位为米，内部为负。
+
+wp.config.kernel_cache_dir = str(asset_root.resolve() / ".warp_cache")
+wp.init()
+with open(assets / "stairs_scene_bool_sdf.nvdb", "rb") as file:
+    volume = wp.Volume.load_from_nvdb(file, device="cuda:0")
+# Warp kernel 内：先 volume_world_to_index，再 volume_sample_f(..., wp.Volume.LINEAR)。
+```
+
+NPZ 还记录 `shape`、`up_axis`、`axis_order="XYZ"`、`unit="m"`、`sign_convention="negative_inside"`、来源路径和格式版本。NanoVDB 会将分配区域补齐到 8 的倍数；**仅 NPZ 定义的采样域具有完整距离意义**，域外和补齐部分使用正背景值，不是该处真实距离。在线性插值时也应保持在有效采样域内。
+
+### 精度和检查
+
+脚本按最近表面距离与绕数烘焙，不做全局平滑、距离偏移或补洞；使用 Warp Marching Cubes 重建，只焊接重复点、移除零面积面。SDF 保存后会检查 NPZ 全数组一致性，以及 NanoVDB 网格点和域内插值的坐标一致性。
+
+默认场景的网格为约 `611×139×411`，单个 SDF 数组约 133 MiB。Marching Cubes 中间数组比 SDF 本身大很多，脚本会报告保守显存估计；不足时停止并提示增大采样间距，不会偷偷降低精度。
+
+终端报告重建的封闭性、朝向、连通分量、体积及双向各 2 万点的表面误差。误差按表面积采样，平均值可能被大片平面主导；采样最大值也不是严格的 Hausdorff 上界，不能作为脚部精度保证。体素重建可能改变锐角和细节，也不保证消除所有瘦长三角形。
+
+中央竖切片未必穿过奶牛的四只脚；切片上身体与平台分离不表示整个三维模型悬空。水平切片默认位于平台上方，用于观察四只脚的内部区域。图片颜色只显示 ±5 个采样间距，保存的距离数值未截断。
+
+输入、参数或显存检查失败时停止；如果重建阶段失败，已经保存的 SDF 和切片保留，已导出的异常 OBJ 用于诊断，并明确报错。
 
 ## 输出格式速查
 
@@ -591,7 +729,7 @@ scene_mesh.export(asset_dir / "scene.obj")
 | 现象 | 检查和处理 |
 |---|---|
 | 地形竖着 | 检查向上轴；Y-up 查看器用导出前绕 X 轴 −90° |
-| 资产找不到 | 当前输出固定在本目录 `Assets`，终端会打印绝对路径 |
+| 资产找不到 | 导入模型位于 `Assets/origin`，纯地形输出到 `Assets/procedural`，场景/SDF 输出到 `Assets/output`；终端打印绝对路径 |
 | 高度、尺寸不对 | OBJ 不约定单位；统一米制，并区分高度幅度与总体宽度 |
 | 未识别的地形类型 | 名称必须是七种内置字符串之一，或传入自定义函数 |
 | 提示不认识某个参数 | 只在对应地形字典中传该类型支持的参数 |
