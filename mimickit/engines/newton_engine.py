@@ -9,6 +9,7 @@ import pyglet
 
 import engines.engine as engine
 import engines.newton_recorder as newton_recorder
+import util.resource_util as resource_util
 from util.logger import Logger
 
 def str_to_key_code(key_str):
@@ -350,6 +351,22 @@ class NewtonEngine(engine.Engine):
     
     def get_name(self):
         return "newton"
+
+    def close(self):
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        self._recording = False
+        # Keep viewers and their event-handler owners alive until GL windows close.
+        viewer = getattr(self, "_viewer", None)
+        recorder = getattr(self, "_video_recorder", None)
+        resource_util.cleanup(
+            recorder.close if recorder is not None else None,
+            lambda: resource_util.close_viewer(viewer),
+        )
+        self._viewer = None
+        self._video_recorder = None
+        return
     
     def create_env(self):
         env_id = len(self._obj_builders)
@@ -997,7 +1014,7 @@ class NewtonEngine(engine.Engine):
         return builder
     
     def _build_viewer(self):
-        self._viewer = newton.viewer.ViewerGL(headless=False)
+        self._viewer = resource_util.construct(newton.viewer.ViewerGL, headless=False)
         self._draw_line_count = 0
 
         def on_keyboard_event(symbol, modifiers):
@@ -1145,7 +1162,7 @@ class NewtonEngine(engine.Engine):
 
     def _build_video_recorder(self) -> newton_recorder.NewtonVideoRecorder:
         Logger.print("Video recording enabled")
-        return newton_recorder.NewtonVideoRecorder(self)
+        return resource_util.construct(newton_recorder.NewtonVideoRecorder, self)
 
 
 @wp.kernel

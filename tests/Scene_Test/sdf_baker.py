@@ -270,31 +270,33 @@ def save_slices(values, origin, voxel_size, up_axis, slice_height, output_path):
             (horizontal_axes[1], int((shape[horizontal_axes[1]] - 1) // 2)),
             (height_axis, height_index)]
     fig, axes = plt.subplots(1, 3, figsize=(16, 5), constrained_layout=True)
-    limit = 5 * voxel_size  # 仅截断显示颜色，不截断保存的距离值。
-    names = "XYZ"
-    for ax, (fixed_axis, index) in zip(axes, cuts):
-        remaining = [axis for axis in range(3) if axis != fixed_axis]
-        # 将高度放到图的纵轴；水平图则使用两个水平方向。
-        x_axis = next((a for a in remaining if a != height_axis), remaining[0])
-        y_axis = next(a for a in remaining if a != x_axis)
-        cut = np.take(values, index, axis=fixed_axis)
-        image = cut.T if remaining == [x_axis, y_axis] else cut
-        x = origin[x_axis] + np.arange(shape[x_axis]) * voxel_size
-        y = origin[y_axis] + np.arange(shape[y_axis]) * voxel_size
-        # imshow 的 extent 表示像素边缘；扩半格使像素中心与采样点一致。
-        extent = (x[0] - voxel_size / 2, x[-1] + voxel_size / 2,
-                  y[0] - voxel_size / 2, y[-1] + voxel_size / 2)
-        artist = ax.imshow(image, origin="lower", extent=extent, cmap="RdBu", vmin=-limit, vmax=limit,
-                           interpolation="nearest", aspect="equal")
-        if image.min() < 0 < image.max():
-            ax.contour(x, y, image, levels=[0], colors="black", linewidths=0.6)
-        actual_height = origin[fixed_axis] + index * voxel_size
-        ax.set(title=f"{names[fixed_axis]} = {actual_height:.4f} m",
-               xlabel=f"{names[x_axis]} (m)", ylabel=f"{names[y_axis]} (m)")
-    fig.colorbar(artist, ax=axes, label="Signed distance (m); negative = inside")
-    fig.suptitle(f"SDF slices ({up_axis}-up, voxel={voxel_size:g} m); black = zero contour")
-    fig.savefig(output_path, dpi=180)
-    plt.close(fig)
+    try:
+        limit = 5 * voxel_size  # 仅截断显示颜色，不截断保存的距离值。
+        names = "XYZ"
+        for ax, (fixed_axis, index) in zip(axes, cuts):
+            remaining = [axis for axis in range(3) if axis != fixed_axis]
+            # 将高度放到图的纵轴；水平图则使用两个水平方向。
+            x_axis = next((a for a in remaining if a != height_axis), remaining[0])
+            y_axis = next(a for a in remaining if a != x_axis)
+            cut = np.take(values, index, axis=fixed_axis)
+            image = cut.T if remaining == [x_axis, y_axis] else cut
+            x = origin[x_axis] + np.arange(shape[x_axis]) * voxel_size
+            y = origin[y_axis] + np.arange(shape[y_axis]) * voxel_size
+            # imshow 的 extent 表示像素边缘；扩半格使像素中心与采样点一致。
+            extent = (x[0] - voxel_size / 2, x[-1] + voxel_size / 2,
+                      y[0] - voxel_size / 2, y[-1] + voxel_size / 2)
+            artist = ax.imshow(image, origin="lower", extent=extent, cmap="RdBu", vmin=-limit, vmax=limit,
+                               interpolation="nearest", aspect="equal")
+            if image.min() < 0 < image.max():
+                ax.contour(x, y, image, levels=[0], colors="black", linewidths=0.6)
+            actual_height = origin[fixed_axis] + index * voxel_size
+            ax.set(title=f"{names[fixed_axis]} = {actual_height:.4f} m",
+                   xlabel=f"{names[x_axis]} (m)", ylabel=f"{names[y_axis]} (m)")
+        fig.colorbar(artist, ax=axes, label="Signed distance (m); negative = inside")
+        fig.suptitle(f"SDF slices ({up_axis}-up, voxel={voxel_size:g} m); black = zero contour")
+        fig.savefig(output_path, dpi=180)
+    finally:
+        plt.close(fig)
     print(f"SDF 切片：{Path(output_path).resolve()}", flush=True)
 
 

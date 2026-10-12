@@ -5,6 +5,7 @@ import wandb
 
 import util.logger as logger
 import util.video as video
+import util.resource_util as resource_util
 
 
 class WandbLogger(logger.Logger):
@@ -17,6 +18,7 @@ class WandbLogger(logger.Logger):
         self._param_config = param_config
         self._step_var_key = None
         self._collections = dict()
+        self._run = None
         return
     
     def reset(self):
@@ -29,7 +31,7 @@ class WandbLogger(logger.Logger):
         if (logger.Logger.is_root()):
             basename = os.path.basename(filename)
             exp_name = os.path.splitext(basename)[0]
-            wandb.init(project=self._project_name, name=exp_name, config=self._param_config)
+            self._run = wandb.init(project=self._project_name, name=exp_name, config=self._param_config)
         
         return
 
@@ -76,6 +78,12 @@ class WandbLogger(logger.Logger):
         if (name not in self._collections):
             self._collections[name] = []
         self._collections[name].append(key)
+        return
+
+    def close(self):
+        owned_run = self._run
+        self._run = None
+        resource_util.cleanup(owned_run.finish if owned_run is not None else None, super().close)
         return
     
     def _build_key_tags(self):
