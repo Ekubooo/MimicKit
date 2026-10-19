@@ -1,6 +1,6 @@
 # SMP 后续工作计划
 
-最后更新：2026-10-19（Asia/Shanghai）
+最后更新：2026-10-20（Asia/Shanghai）
 
 ## 1. 总体目标与状态
 
@@ -11,7 +11,7 @@
 | 方向 | 完成 | 状态 | 当前检查点 | 开始日期 | 完成日期 | 结果/备注 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1. 适配最新 Newton 并验证重训 | [ ] | 未开始 | 已核对版本与主要适配范围 | — | — | 先建立新版回归基线，再决定重训范围 |
-| 2. SMP diffusion 尝试 | [ ] | 进行中 | A5000 50k 已完成，生成片段目测尚可；按最新要求准备论文区间下限 400k | 2026-10-19 | — | 先从头训练 400k diffusion，RL 等反馈后再继续 |
+| 2. SMP diffusion 尝试 | [ ] | 进行中 | A5000 400k 已完成，正在检查 SDS 与站立候选兼容性 | 2026-10-19 | — | 离线评分脚本已准备，远端运行后再接入 RL |
 | 3. 起身策略训练及多模型组合 | [ ] | 未开始 | 当前先验证独立起身并站稳 | — | — | 用户已将其他任务和策略切换推迟 |
 | Location 后期风格分化研究 | [ ] | 暂缓 | 中期自然、最终动作古怪，已保留对照信息 | — | — | 用户明确允许先搁置 |
 
@@ -162,7 +162,7 @@
 
 ### 4.2 详细现状
 
-- 当前 RL 已使用冻结的下载 prior，但尚未自行完成新的 diffusion prior 训练与后续 RL 验证。
+- 当前既有 RL 使用冻结的下载 prior；自训练起身 prior 已完成 50k 和 400k，尚未完成其评分验收和 Getup RL 验证。
 - 已有三个 prior：`smp_prior_spinkick.pt`、`smp_prior_lafan.pt`、`smp_prior_locomotion.pt`，位于 `data/models/smp_priors/`。
 - 已有入口：`tools/diffusion_model/train_tinymdm.py`，支持训练和测试/采样模式。
 - 单动作配置：`tools/diffusion_model/config/tinymdm_single_clip.yaml`，默认 batch size 512、50,000 次更新，当前数据为回旋踢。
@@ -186,6 +186,7 @@
 - prior 训练完成不代表已经具备物理起身能力；动作控制仍由新训练的起身 RL 策略承担。
 - [x] 已确认：起身参考动作存在，冻结和 SDS reward 的通用代码可复用。
 - [x] 已完成专用起身数据集与特征配置。
+- [x] 已完成专用起身 prior 400k 训练与初步生成采样反馈。
 - [ ] 已训练并验证专用起身 diffusion prior。
 - [ ] 已将新 prior 接入起身 RL 环境并验证评分。
 
@@ -206,7 +207,7 @@
 
 - [x] 将仰躺、俯卧起身 motion 组织为一个数据集。
 - [ ] 决定站立末段/过渡数据、采样权重和动作覆盖范围。
-- [ ] 训练覆盖两种起身方式的 prior。
+- [x] 完成联合两种起身方式的 prior 训练预算（400k）；质量验收另列。
 - [ ] 检查起身局部片段的生成、评分与站立兼容性。
 - [ ] 固定输出配置与权重，交给起身 RL 环境使用。
 
@@ -237,6 +238,8 @@
 | 2026-10-19 | 进行中 | dataset_humanoid_getup.yaml / tinymdm_getup.yaml | 本地 RTX 5070、2 次更新，通过保存、重新加载及 motion/GIF 导出；不代表质量验证 | output/getup_prior_smoke_check/；A5000 计划 output/a5000_getup_prior_joint_50k_r01/ | 远端首轮 50k 与结果反馈 |
 | 2026-10-19 | 50k 训练已完成，质量待进一步验证 | tinymdm_getup.yaml | log12：21:09:21–21:27:21，18 分钟，EXIT_CODE=0；Iteration 49999，Loss 0.2749→0.04247；用户查看多个样本认为尚可 | output/a5000_getup_prior_joint_50k_r01/ | 独立从头训练 400k；暂不启动 RL |
 | 2026-10-19 | 配置已准备，未启动 | tinymdm_getup_400k.yaml | 按论文 400k–800k 区间取 400k，针对短动作保留 batch 512、lr 1e-4、统计窗口 10k | 计划 output/a5000_getup_prior_joint_400k_scratch_r01/ | 用户同步并运行；RL 暂定 1B samples、2048 环境，反馈后再实施 |
+| 2026-10-20 | 400k 训练完成；评分待验证 | tinymdm_getup_400k.yaml | log13：2h30m12s，EXIT_CODE=0，Iteration 399999；Loss 0.0228136，用户目测总体正常。原 faceup 参考确有抬腿翻身阶段，单张截图不足以判断异常 | output/a5000_getup_prior_joint_400k_scratch_r01/ | 进行离线 SDS / 站立候选检查 |
+| 2026-10-20 | 检查工具已准备 | tools/diffusion_model/check_getup_prior.py | 本地 5 项契约检查通过，短测权重跑通默认评分与导出；不代表远端 prior 质量 | 计划 output/a5000_getup_prior_check_400k_r01/ | 用户同步并运行；反馈 summary、runtime 与两张图 |
 
 本轮先从起身联合 prior 开始，不额外要求完成回旋踢 prior。联合数据按仰卧/俯卧各 50% 采样；
 网络和优化参数沿用单动作配置，50k 是首轮预算。特征配置为
@@ -245,12 +248,14 @@ data/envs/smp_getup_prior_env.yaml（仅供离线 prior，不能作为 Getup RL 
 本地短测仅验证流程。A5000 后续 50k 实测已完成，用户对生成片段目测尚可；
 该结果尚未验证 reward 评分能力或物理起身策略。
 
-当前用户最新要求优先按论文标准，并分析两段短动作适配；先从头完成 400k diffusion，再根据结果继续 RL。
+当前按论文标准和短动作适配已完成从头 400k diffusion；继续做离线 SDS / 站姿候选评分，随后推进 RL。
 512 表示每次梯度更新采样 512 个 10 帧动作窗口，不是并行仿真环境数；
 400k × 512 = 204,800,000 次窗口采样，不代表同等数量的独立原始动作。
 200k 是仓库多动作默认配置，已不作为本轮主方案。论文 v3 第 6.2 节写明训练 400k–800k 次更新，
 本轮取下限 400k；这对齐迭代范围，不等于数据和全部参数的精确复现。
 两段动作共 6.8s，但缺数秒稳定站立末段；进入 RL 前需检查站姿 SDS 兼容性。
+评分命令见 docs/GETUP_PRIOR_CHECK_WINDOWS.md。该工具只报告 raw SDS 与参考相对值，
+不冒充真实 RL 自适应归一化后的 reward，不用单个阈值自动判定重训或物理站稳。
 运行说明见 docs/GETUP_PRIOR_400K_WINDOWS.md；不加载旧 prior，保留 50k 输出。
 适配细节及 RL 预算见 docs/GETUP_SHORT_MOTION_ANALYSIS.md。
 RL 暂定 1B samples，按 2048×32 对齐为 1,000,013,824（15,259 更新）；
@@ -270,7 +275,7 @@ RL 暂定 1B samples，按 2048×32 对齐为 1,000,013,824（15,259 更新）�
   - `data/motions/humanoid/humanoid_getup_facedown.pkl`，俯卧起身，约 3.03 秒。
 - SMPL 也有对应两段动作；当前实际控制对象是 Humanoid，不混用不同骨架的数据。
 - motion 是参考姿态序列，不是 diffusion prior，也不是 RL 策略。
-- 已完成专用起身 prior 首轮 50k，400k 配置已准备；尚无 Getup RL checkpoint、Getup 环境或 RL 一键训练预设。
+- 已完成专用起身 prior 50k 和 400k，离线评分工具已准备；尚无 Getup RL checkpoint、Getup 环境或 RL 一键训练预设。
 - 专用起身 prior 需要自行训练；冻结与 SDS reward 可复用现有实现，具体边界见方向二的补充问题。起身 RL 训练与现有基础策略在新版上的无训练迁移验证属于不同工作项。
 - 当前四项任务开启摔倒提前终止，非脚部接触地面可判失败并触发重置；这与起身时需要手、膝、身体接触地面冲突。
 - 当前任务还有 10/20 秒回合上限；仅关闭摔倒重置不能自动实现持续任务管理或起身能力。

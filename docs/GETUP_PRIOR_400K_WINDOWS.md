@@ -1,5 +1,9 @@
 # A5000 联合起身 prior：论文区间下限 400k，从头训练
 
+2026-10-20 状态：本轮已完成。log13 记录 2026-10-19 22:43:44 至 2026-10-20 01:13:56，2h30m12s，
+EXIT_CODE=0，最终 Loss 0.0228136；用户目测大多数样本正常。
+下一步评分/站姿检查见 GETUP_PRIOR_CHECK_WINDOWS.md。
+
 本轮只进行 diffusion；收到结果后再继续 Getup RL。
 配置为 tools/diffusion_model/config/tinymdm_getup_400k.yaml。
 以已验证 50k 起身配置为基线，仅将更新预算扩展至 400,000：
