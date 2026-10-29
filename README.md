@@ -135,6 +135,13 @@ where 3D rotations are specified using 3D exponential maps. Joint rotations are 
 The rotations of 3D joints are represented using 3D exponential maps, and the rotations of 1D joints are represented using 1D rotation angles.
 
 
+## Motion PCA
+
+The [motion PCA tool](tools/motion_analysis/README.md) supports per-frame pose PCA,
+window PCA, cached reconstruction, and interactive Original/Reconstructed playback
+with cumulative, single-component, or arbitrary component selections. It preserves
+the source motion's root pose, frame rate, and loop mode.
+
 ## Motion Retargeting
 Motion retargeting can be done using [GMR](https://github.com/YanjieZe/GMR). A script to convert GMR files to the MimicKit format is available in [`tools/gmr_to_mimickit/`](tools/gmr_to_mimickit/).
 

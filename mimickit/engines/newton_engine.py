@@ -811,6 +811,29 @@ class NewtonEngine(engine.Engine):
         assert(key_code not in self._keyboard_callbacks)
         self._keyboard_callbacks[key_code] = callback_func
         return
+
+    def register_ui_callback(self, callback_func, position="side"):
+        """Expose Newton's optional UI extension without exposing its viewer."""
+        viewer = self._viewer
+        if viewer is None or viewer.ui is None or not viewer.ui.is_available:
+            raise RuntimeError("Interactive PCA controls require Newton's imgui-bundle viewer UI.")
+        viewer.register_ui_callback(callback_func, position=position)
+        return
+
+    def get_viewer_paused(self):
+        """Read the viewer's pause control for an opt-in playback controller."""
+        return self._viewer is not None and self._viewer.is_paused()
+
+    def set_viewer_paused(self, paused):
+        """Keep opt-in playback controls synchronized with Newton's pause UI."""
+        if self._viewer is not None:
+            # Current Newton exposes is_paused(), but no public setter.
+            setter = getattr(self._viewer, "set_paused", None)
+            if callable(setter):
+                setter(bool(paused))
+            else:
+                self._viewer._paused = bool(paused)
+        return
     
     def _validate_envs(self):
         num_envs = self.get_num_envs()

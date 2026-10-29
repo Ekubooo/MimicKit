@@ -197,7 +197,9 @@ starts：仰卧/俯卧各 50 次，采用原 motion 第一帧及其原始速度�
 augmented：各 motion 种子各 50 次并随机化倒地姿态，速度为零，用于检查泛化；
 必要时再换 seed456，输出目录也换名。mixed 仅作为训练分布诊断，不用于代替倒地起点成功率。
 `summary.txt` / `evaluation.json` 含总体和分 motion 成功率，`episodes.csv` 含每回合明细。
-评测 task return 不是加上 SMP 的训练总 reward，不能直接与 Train_Return 横比。
+当前实现的 Train_Return 和 Test_Return 都累计环境返回的 task reward；
+SMP 在采样后写入 PPO buffer，因此这两个 Return 字段均不是 task+SMP 的优化总回报。
+两者还分别采用训练/评测初始化和随机/确定性动作，比较时需考虑这些差异。
 
 ## 6. 给我的反馈清单
 
@@ -228,3 +230,90 @@ notepad output\a5000_getup_2048_full_r01\evaluation_augmented_seed123\summary.tx
 100 环境各首回合评测成功，后者严格输出 100 行回合数据、两种 motion 各 50 行。
 训练反馈汇总已验证日志列数一致且无非有限值。测试策略不具备起身能力，不作为训练结果发布。
 本地文件位于 Git 忽略的 `output/getup_rl_local_check/`，不会混入远端完整训练配置或提交。
+
+## 首轮完整训练反馈（2026-10-21）
+
+远端 r01 正常完成：2026-10-20 02:53:11–22:27:48，19h34m37s，
+EXIT_CODE=0，Iteration=15258，Samples=1,000,013,824，最终吞吐约 14.2k samples/s。
+反馈汇总审计 78 行、无不完整行、无非有限指标；这不排除逻辑或适配错误。
+最终 2048 回合定期评测成功率、结束站稳率、最长站稳时间平均值均为 0；
+提供的中后期训练成功率也为 0。用户观察：地面抽搐，幅度很小，无法起身。
+本轮判定为技能目标失败，不继续沿用原配置直接追加完整预算。
+
+Test_Return 最终约 300.21 / 600 步 = 每步 task reward 0.50035；
+中后期 SMP reward 均值约 0.39，SDS 约 0.70–0.77，表明分数提高未转化为起身。
+20 秒回合长度由关闭摔倒终止和超时决定，不能作为起身/平衡成绩。
+
+待验证原因：低姿态向上速度项可能奖励反复触地的小幅振动；当前 prior 对静态站姿高 SDS，
+可能与持续站立冲突；成功条件中的躯干、脚接触和持续时间没有直接进入 task reward。
+这些是代码/历史诊断支持的假设，尚缺该策略的逐步姿态、速度和分项 reward 证据，
+不能直接把它们定为唯一根因，也不把论文截断适配版视作已验证正确的唯一实现。
+下一步先核对真实速度与位置差分、接触力、分项 reward 和 prior 评分，再做有停止条件的短程对照，
+不因本轮失败直接认定必须升级 Newton、重训 diffusion 或继续追加 10 亿样本。
+
+### 完整日志复核（2026-10-21）
+
+用户随后提供完整 log.txt：78 条记录、40 列，均完整且数值有限。
+全部记录的 Train/Test 成功率与结束站稳率均为 0，Test 平均最长站稳时间也始终为 0。
+记录累计覆盖 1,562,624 个结束的训练回合、159,744 个定期评测回合；后者是重复的固定起点，
+不能视为同等数量的独立随机倒地状态。中途未结束就被评测切换重置的训练回合不在该完成回合统计内。
+训练增广回合占比约 10.024%，与配置的 10% 一致。
+
+| Iteration | 已用小时 | Test_Return（task） | SMP 均值（训练 rollout） | SDS 均值（训练 rollout） | Test 起身成功率 |
+| --- | --- | --- | --- | --- | --- |
+| 200 | 0.256 | 286.98 | 0.0000597 | 4.94 | 0 |
+| 5000 | 6.353 | 418.94（最高） | 0.00422 | 5.08 | 0 |
+| 5800 | 7.369 | 17.93 | 0.32163 | 0.857 | 0 |
+| 6000 | 7.628 | 249.82 | 0.34496 | 0.806 | 0 |
+| 15000 | 19.232 | 301.77 | 0.39291 | 0.703 | 0 |
+| 15258 | 19.572 | 300.21 | 0.33522 | 1.045 | 0 |
+
+这增加了两点判断：早期 SMP 平均奖励很低时也未学出有效起身，不能只归因于后期 prior 太强；
+约 5200–5800 迭代期间，任务表现下降与 SMP 上升/原始 SDS 下降同时发生，支持策略行为转变的判断，
+但日志仍不能确认该行为的姿态或是否在利用速度项。
+两个 normalizer 的更新阈值均为 100M samples，按代码约在 1526 更新附近停止，
+不能将 5800 迭代的转折直接解释成此时刚好冻结 normalizer。
+尚无证据证明某个中间模型已学会起身；5000 模型用于诊断比较，不作为可用策略推荐。
+
+### 5000 / 5800 可视观察与下一步诊断
+
+用户反馈：5000 有大幅度“鲤鱼打挺”式恢复尝试，但反复循环、无法站起；
+5800 的仰卧完全不动，俯卧尝试一次摔倒后也停止。这支持“早期有恢复尝试，后期转为失败后静止”
+的行为退化判断，尚不能单凭观察把静止归因于 prior，也不能据此断言原奖励只有抽搐解。
+
+新增只读工具 `tools/getup/diagnose_getup.py`：每份模型新建 2 个环境，仰卧/俯卧各跑一个完整首回合，
+记录头/根高度、真实位置变化、报告的竖直速度、姿态/脚接触、动作和关节变化、任务奖励分项。
+物理采样完成后，用该 checkpoint 保存的 prior/SDS normalizer 进行 4 次噪声评分，
+输出 raw/normalized SDS、SMP 与加权混合奖励，并对参考窗口、静态倒地起点、默认站姿候选评分。
+该工具不更新策略、normalizer 或 prior；不写训练 checkpoint。评分是固定种子的 Monte Carlo 估计，
+不是当时训练随机初始化/随机动作下那一行日志的精确重放。
+位置差分是一个控制步的平均速度，传感器速度是步末瞬时值，碰撞时二者可有差别，
+不能把单帧差异直接当作后端 bug。静态候选同样不冒充经过验证的物理平衡状态。
+
+本地提交这些诊断改动（用户操作；不更改训练配置）：
+
+```bat
+cd /d D:\ComputerScience\PROJECT\MimicKit
+git add tools/getup/diagnose_getup.py tests/test_getup_diagnose.py docs/GETUP_RL_WINDOWS.md plan.md
+git commit -m "Add read-only Getup checkpoint reward diagnostics"
+git push origin main
+```
+
+远端 Anaconda Prompt：
+
+```bat
+cd /d C:\Project\MimicKit
+git pull --ff-only origin main
+conda activate mimickit-newton
+python tools/getup/diagnose_getup.py --model_files output/a5000_getup_2048_full_r01/int_models/model_0000005000.pt output/a5000_getup_2048_full_r01/int_models/model_0000005800.pt --out_dir output/a5000_getup_2048_full_r01/diagnostic_5000_5800_seed123
+notepad output\a5000_getup_2048_full_r01\diagnostic_5000_5800_seed123\summary.txt
+```
+
+预计只需数分钟，实际以本机编译、仿真和评分速度为准，不是新训练。
+请反馈该目录 `summary.txt`；逐帧 `policy_00/trajectory.csv` 和 `policy_01/trajectory.csv`
+先保留，不要求整份发送。若报错，反馈同目录 `console.txt` 尾部。
+工具拒绝写入非空目录，重复诊断请将输出目录改为新名称。
+
+本地已通过 3 项诊断契约检查，且使用短测 checkpoint 在真实 Newton 下跑通单模型与双模型流程；
+每份模型得到 1200 行逐帧记录（2 环境 × 600 步）、四组候选评分及汇总。
+双模型加载与清理正常；本地权重仅用于验证工具，不能替代远端 5000/5800 的诊断结果。
