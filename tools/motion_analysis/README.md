@@ -163,6 +163,8 @@ CLI 输出结果路径；原生 `.pkl` 可以直接由现有 `ViewMotionEnv` 播
 ## 播放器窗口内操作（非 CLI 选项）
 
 两个不同颜色的角色分别代表 Original 与 Reconstructed，共用时间、相同 root 和循环规则。
+PCA 播放器单独使用 2.5 米显示间距，相机跟随两者中点。PCA 控件沿用 Newton/ImGui
+默认字体，并在绘制时局部增加 2 px；共享引擎配置与其他界面的字号不受影响。
 Newton 侧栏中可选择：
 
 - **Cumulative / Single**：通过 K 滑块调整累计数量或单个成分编号。

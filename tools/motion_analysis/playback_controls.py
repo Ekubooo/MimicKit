@@ -4,6 +4,9 @@ from collections import deque
 from typing import Any
 
 
+PCA_FONT_INCREMENT_PX = 2.0
+
+
 class PlaybackControls:
     """Hold UI edits and queue requests for the playback loop to apply safely."""
 
@@ -101,6 +104,18 @@ class PlaybackControls:
             # imgui.ini in the repository's working directory on viewer exit.
             imgui.get_io().set_ini_filename(None)
         self._imgui = imgui
+        # PushFont is scoped to these widgets; do not change the viewer's style
+        # or font atlas. Account for DPI so the displayed increase is two pixels.
+        base_size = imgui.get_style().font_size_base
+        scale = imgui.get_font_size() / base_size
+        imgui.push_font(None, base_size + PCA_FONT_INCREMENT_PX / scale)
+        try:
+            self._draw_contents(imgui)
+        finally:
+            imgui.pop_font()
+
+    def _draw_contents(self, imgui: Any) -> None:
+        """Draw only the PCA section inside the temporary font scope."""
         imgui.separator()
         imgui.text("PCA motion comparison")
         imgui.text("Blue: original | Orange: reconstruction")

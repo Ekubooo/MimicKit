@@ -13,6 +13,10 @@ import numpy as np
 from tools.motion_analysis.playback_controls import PlaybackControls
 
 
+# Display spacing belongs to this comparison tool, not the shared engine YAML.
+COMPARISON_SPACING = 2.5
+
+
 class PauseBridge:
     """Synchronize the environment and Newton UI without duplicate pause states."""
 
@@ -102,6 +106,7 @@ def _environment_types():
             self.session = session
             self.controls = controls
             self._reconstructed = self._checked_reconstruction(controls.active_indices)
+            engine_config = dict(engine_config, env_spacing=COMPARISON_SPACING)
             self._spacing = float(engine_config["env_spacing"])
             super().__init__(env_config, engine_config, 2, device, True)
             self._pause_bridge = PauseBridge(self._engine)
