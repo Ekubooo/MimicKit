@@ -312,6 +312,11 @@ class NewtonEngine(engine.Engine):
         self._device = device
         self._num_envs = num_envs
         self._env_spacing = config["env_spacing"]
+        # GSI can create contact-rich initial poses; keep historical defaults for existing tasks.
+        self._solver_njmax = int(config.get("newton_njmax", 450))
+        self._solver_nconmax = int(config.get("newton_nconmax", 150))
+        if self._solver_njmax <= 0 or self._solver_nconmax <= 0:
+            raise ValueError("Newton constraint/contact capacities must be positive.")
 
         sim_freq = config.get("sim_freq", 60)
         control_freq = config.get("control_freq", 10)
@@ -948,8 +953,8 @@ class NewtonEngine(engine.Engine):
         self._solver = newton.solvers.SolverMuJoCo(
             self._sim_model,
             solver="newton",
-            njmax=450,
-            nconmax=150,
+            njmax=self._solver_njmax,
+            nconmax=self._solver_nconmax,
             impratio=10,
             iterations=100,
             ls_iterations=50
