@@ -37,7 +37,7 @@ class PcaCliTests(unittest.TestCase):
         with (
             patch.object(run_pca, "MOTION_ROOT", self.motion_root),
             patch.object(run_pca, "CACHE_ROOT", self.root / "cache"),
-            patch("tools.motion_analysis.report.generate_report", return_value={}),
+            patch("tools.motion_analysis.reporting.reconstruction.generate_report", return_value={}),
             redirect_stdout(self.output),
             redirect_stderr(self.errors),
         ):
@@ -67,7 +67,7 @@ class PcaCliTests(unittest.TestCase):
         data["frames"][5, 8] = np.inf
         original = pickle.dumps(data)
         self.source.write_bytes(original)
-        with patch("tools.motion_analysis.session.fit_pca", side_effect=AssertionError("Fitted invalid input")):
+        with patch("tools.motion_analysis.core.session.fit_pca", side_effect=AssertionError("Fitted invalid input")):
             self.assertEqual(self.invoke("--mode", "window", "--play"), 1)
         message = self.errors.getvalue()
         self.assertIn(str(self.source), message)
@@ -88,7 +88,7 @@ class PcaCliTests(unittest.TestCase):
         self.assertIn("Selected components: mean only", self.output.getvalue())
 
     def test_playback_view_is_forwarded_without_affecting_offline_selection(self):
-        with patch("tools.motion_analysis.playback.play_session") as play:
+        with patch("tools.motion_analysis.player.environment.play_session") as play:
             self.assertEqual(self.invoke("--view", "classroom", "--play", "--components", "2"), 0)
         self.assertEqual(play.call_args.kwargs["view"], "classroom")
         self.assertEqual(play.call_args.args[1], (0, 1))

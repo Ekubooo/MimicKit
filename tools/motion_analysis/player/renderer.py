@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .playback_view import ViewLayout
+from .view import ViewLayout
 
 
 class PlaybackRenderer:

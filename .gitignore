@@ -8,3 +8,9 @@ output/
 wandb/
 tmp/
 tools/motion_analysis/PCA_Result/
+
+# Keep only the two source documents; generated report assets stay local.
+/report/**
+!/report/humanoid_spinkick/
+!/report/humanoid_spinkick/analysis.md
+!/report/humanoid_spinkick/reproduce.md

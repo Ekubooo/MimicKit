@@ -5,15 +5,15 @@ PCA and the CLI's help/cache paths must not initialize Newton or a GL context.
 """
 
 from pathlib import Path
-import sys
 from typing import Any
 
 import numpy as np
 
-from tools.motion_analysis.playback_controls import PlaybackControls
-from tools.motion_analysis.playback_view import (
+from .controls import PlaybackControls
+from .view import (
     ACTOR_COLORS, FixedCamera, build_layout, cumulative_selections,
 )
+from ..paths import ensure_animation_imports
 
 
 # Display spacing belongs to this comparison tool, not the shared engine YAML.
@@ -131,7 +131,7 @@ def _environment_types():
             engine_config = dict(engine_config, env_spacing=COMPARISON_SPACING)
             self._spacing = float(engine_config["env_spacing"])
             super().__init__(env_config, engine_config, 4, device, True)
-            from tools.motion_analysis.playback_renderer import PlaybackRenderer
+            from .renderer import PlaybackRenderer
 
             self._display_renderer = PlaybackRenderer(self._engine, lambda: self._camera.update())
             self._display_renderer.configure(self._view_layout, controls.view)
@@ -297,9 +297,7 @@ def play_session(session: Any, initial_indices: tuple[int, ...], *,
                  selection_mode: str = "cumulative", env_config: Path,
                  engine_config: Path, device: str = "cuda:0", view: str = "comparison") -> None:
     """Play source and selected PCA reconstruction with one shared clock."""
-    root = Path(__file__).resolve().parents[2]
-    if str(root / "mimickit") not in sys.path:
-        sys.path.insert(0, str(root / "mimickit"))
+    ensure_animation_imports()
 
     import torch
     from envs.env_builder import load_configs

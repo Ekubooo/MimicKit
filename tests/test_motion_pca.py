@@ -13,12 +13,12 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from tools.motion_analysis.motion_data import discontinuity_diagnostics, read_motion
-from tools.motion_analysis.pca import fit_pca
-from tools.motion_analysis.report import generate_report
-from tools.motion_analysis.samples import build_samples, restore_samples
-from tools.motion_analysis.selection import parse_components, resolve_selection
-from tools.motion_analysis.session import load_session
+from tools.motion_analysis.data.motion import discontinuity_diagnostics, read_motion
+from tools.motion_analysis.core.pca import fit_pca
+from tools.motion_analysis.reporting.reconstruction import generate_report
+from tools.motion_analysis.core.samples import build_samples, restore_samples
+from tools.motion_analysis.core.selection import parse_components, resolve_selection
+from tools.motion_analysis.core.session import load_session
 
 
 def write_motion(path: Path, features: np.ndarray, fps: float = 60.0, loop_mode: int = 0) -> None:
@@ -137,7 +137,7 @@ class SessionContracts(unittest.TestCase):
     def test_cache_hit_avoids_svd_and_preserves_source_metadata(self):
         first = self.session()
         self.assertFalse(first.fit_cache_hit)
-        with patch("tools.motion_analysis.session.fit_pca", side_effect=AssertionError("Refitted")):
+        with patch("tools.motion_analysis.core.session.fit_pca", side_effect=AssertionError("Refitted")):
             second = self.session()
         self.assertTrue(second.fit_cache_hit)
         restored = second.reconstruct(tuple(range(second.max_components)))
@@ -163,7 +163,7 @@ class SessionContracts(unittest.TestCase):
         original = self.session()
         output = original.save_reconstruction((0, 2))
         cached = self.session()
-        with patch("tools.motion_analysis.pca.PCAModel.inverse_transform",
+        with patch("tools.motion_analysis.core.pca.PCAModel.inverse_transform",
                    side_effect=AssertionError("Repeated inverse PCA")):
             frames = cached.reconstruct((2, 0))
             np.testing.assert_array_equal(frames, read_motion(output).frames)
@@ -195,7 +195,7 @@ class SessionContracts(unittest.TestCase):
         output.write_bytes(b"incomplete")
         repaired = original.save_reconstruction((0,))
         self.assertEqual(read_motion(repaired).frames.shape, original.source.frames.shape)
-        with patch("tools.motion_analysis.session.fit_pca", wraps=fit_pca) as fit:
+        with patch("tools.motion_analysis.core.session.fit_pca", wraps=fit_pca) as fit:
             forced = self.session(force=True)
         self.assertEqual(fit.call_count, 1)
         self.assertFalse(forced.fit_cache_hit)
@@ -230,7 +230,7 @@ class SessionContracts(unittest.TestCase):
         self.assertTrue(Path(first["report_path"]).is_file())
         self.assertGreater(first["reconstruction_rmse"], 0)
         Path(first["scores_plot"]).unlink()
-        with patch("tools.motion_analysis.session.fit_pca", side_effect=AssertionError("Refitted")):
+        with patch("tools.motion_analysis.core.session.fit_pca", side_effect=AssertionError("Refitted")):
             cached = self.session()
             second = generate_report(cached, (0, 1), path)
         self.assertTrue(Path(second["scores_plot"]).is_file())

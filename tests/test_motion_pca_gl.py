@@ -23,9 +23,9 @@ class NewtonPcaIntegration(unittest.TestCase):
         import torch
         from envs.env_builder import load_configs
         from envs.sim_env import PlayMode
-        from tools.motion_analysis.playback import _environment_types
-        from tools.motion_analysis.playback_controls import PlaybackControls
-        from tools.motion_analysis.session import load_session
+        from tools.motion_analysis.player.environment import _environment_types
+        from tools.motion_analysis.player.controls import PlaybackControls
+        from tools.motion_analysis.core.session import load_session
 
         original_cwd = Path.cwd()
         os.chdir(ROOT)
@@ -93,7 +93,7 @@ class NewtonPcaIntegration(unittest.TestCase):
                         roots = env._engine.get_root_pos(env._get_char_id())
                         torch.testing.assert_close(roots[0], roots[1])
 
-                    from tools.motion_analysis.playback_view import build_layout
+                    from tools.motion_analysis.player.view import build_layout
 
                     model = env._engine.get_sim_model()
                     model_scales = model.shape_scale.numpy().copy()

@@ -11,8 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "mimickit"))
 
-from tools.motion_analysis.playback import PauseBridge, _environment_types
-from tools.motion_analysis.playback_controls import PlaybackControls
+from tools.motion_analysis.player.environment import PauseBridge, _environment_types
+from tools.motion_analysis.player.controls import PlaybackControls
 
 
 class FakeSession:

@@ -3,14 +3,15 @@
 import hashlib
 import json
 from pathlib import Path
-import sys
 from typing import Sequence, TYPE_CHECKING
 
 import numpy as np
 
-from .motion_data import discontinuity_diagnostics
-from .selection import normalize_indices
-from .session import AnalysisSession, atomic_write
+from ..data.motion import discontinuity_diagnostics
+from ..core.selection import normalize_indices
+from ..core.session import AnalysisSession
+from ..data.storage import atomic_write
+from ..paths import ensure_animation_imports
 
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
@@ -72,9 +73,7 @@ def _fk_metrics(source: np.ndarray, reconstructed: np.ndarray, char_file: Path) 
     """Reuse MimicKit's CPU kinematics, without importing environment/engine code."""
     import torch
 
-    mimickit_root = Path(__file__).resolve().parents[2] / "mimickit"
-    if str(mimickit_root) not in sys.path:
-        sys.path.insert(0, str(mimickit_root))
+    ensure_animation_imports()
     import util.torch_util as torch_util
 
     if char_file.suffix.lower() == ".xml":

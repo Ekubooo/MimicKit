@@ -3,7 +3,7 @@
 from collections import deque
 from typing import Any
 
-from .playback_view import VIEW_LABELS, VIEW_MODES, cumulative_selections
+from .view import VIEW_LABELS, VIEW_MODES, cumulative_selections
 
 
 class PlaybackControls:
@@ -66,7 +66,7 @@ class PlaybackControls:
 
     def request_selection(self) -> bool:
         """Validate the edited selection without doing PCA or disk I/O in ImGui."""
-        from tools.motion_analysis.selection import parse_components, resolve_selection
+        from ..core.selection import parse_components, resolve_selection
 
         try:
             components = parse_components(self.component_text) if self.mode == "subset" else ()

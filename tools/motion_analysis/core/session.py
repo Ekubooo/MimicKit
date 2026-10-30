@@ -4,17 +4,16 @@ from collections import OrderedDict
 import hashlib
 import io
 import json
-import os
 from pathlib import Path
 import pickle
 import re
-import tempfile
 from typing import Sequence
 from zipfile import BadZipFile
 
 import numpy as np
 
-from .motion_data import MotionData, motion_bytes, read_motion
+from ..data.storage import atomic_write
+from ..data.motion import MotionData, motion_bytes, read_motion
 from .pca import PCAModel, fit_pca
 from .samples import SampleLayout, build_samples, restore_samples
 from .selection import normalize_indices
@@ -29,19 +28,6 @@ def _digest(data: bytes) -> str:
 
 def _json_bytes(data: dict) -> bytes:
     return (json.dumps(data, sort_keys=True, indent=2, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
-
-
-def atomic_write(path: Path, content: bytes) -> None:
-    """Replace one completed artifact; a manifest is written only after its data."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, name = tempfile.mkstemp(prefix=".pca-", dir=path.parent)
-    temporary = Path(name)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(content)
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 class AnalysisSession:

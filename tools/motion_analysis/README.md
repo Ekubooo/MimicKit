@@ -1,35 +1,69 @@
 # Motion PCA
 
-对原生 MimicKit motion 做离线 PCA、缓存重建结果，并用 Newton 比较原始与重建动作。
-第一版使用原生关节 DOF，不涉及训练、diffusion 或重定向。
+对原生 MimicKit motion 做 pose/window PCA、缓存重建，并用 Newton 播放原始与重建动作。
+另外提供冻结 SMP prior 的采样/解码、多片段集合分析和案例报告导出；不在工具中训练控制策略。
 
-## 代码架构：PCA 计算与播放器分开
+## 代码架构
+
+顶层保留命令入口，具体实现按职责分包：
 
 ```text
-run_pca.py                         统一 CLI 入口，连接下面两部分
+tools/motion_analysis/
+├─ run_pca.py                    单个 motion：离线 PCA，可选 --play
+├─ run_smp.py                    冻结 SMP prior：采样、阶段记录和原生导出
+├─ play_analysis.py              仅播放已保存的集合分析，不采样、不拟合
+├─ prepare_case.py               案例准备入口 → workflows/spinkick.py
+├─ case_plots.py                 绘图入口 → reporting/plots.py
+├─ case_gifs.py                  GIF 入口 → reporting/gifs.py
+├─ paths.py                     仓库、数据、缓存位置及动画层导入路径
 │
-├─ PCA 计算与结果管理              不加载 Newton
-│  ├─ motion_data.py              motion 读写、元数据、DOF 跳变检查
-│  ├─ samples.py                  pose/window 样本构造与窗口合并
-│  ├─ pca.py                      拟合、投影、逆变换的数学核心
-│  ├─ selection.py                将累计/单成分/任意集合转换为成分索引
-│  ├─ session.py                  AnalysisSession、两级缓存、按需重建
-│  └─ report.py                   误差、解释方差、系数图；按需调用 CPU FK
+├─ data/                        数据读写与持久化
+│  ├─ motion.py                 MotionData、原生 motion 读写、DOF 跳变检查
+│  ├─ resampling.py             通过现有 MotionLib 在规则时钟上重采样
+│  └─ storage.py                原子写入，供所有子包共用
 │
-└─ 播放器                         仅指定 --play 时加载
-   ├─ playback_controls.py        侧栏控件、成分选择、播放操作请求
-   ├─ playback_view.py            三种显示布局、固定相机、累计成分集合
-   ├─ playback_renderer.py        Newton 渲染可见性与相机输入适配
-   └─ playback.py                 四角色常驻、共享时间、暂停同步、内存动作库
-       └─ 复用 MimicKit 动画层 → NewtonEngine → Newton Viewer
+├─ core/                        PCA 计算与缓存，不依赖播放器、SMP 或 Newton
+│  ├─ pca.py                    float64 中心化 SVD、投影与逆变换
+│  ├─ samples.py                pose/window 样本与窗口重叠合并
+│  ├─ selection.py              累计/单项/子集成分索引
+│  ├─ session.py                单片段 AnalysisSession、拟合/重建缓存
+│  └─ collection.py             多片段拟合、共享基底投影、分析快照读写
+│
+├─ smp/
+│  └─ sampling.py               prior 加载、EMA/DDPM、阶段记录、解码及采样缓存
+│
+├─ player/                      播放与显示适配，不实现 PCA 或 diffusion 数学
+│  ├─ environment.py            内存动作库、同步角色、暂停桥接、play_session()
+│  ├─ controls.py               侧栏、K 滑条和±1、子集与播放请求
+│  ├─ view.py                   三种布局、固定相机和课件累计选择
+│  └─ renderer.py               Newton 可见性与相机输入兼容适配
+│
+├─ reporting/                   报告与媒体导出
+│  ├─ reconstruction.py         单片段 PCA 的误差/方差/系数报告
+│  ├─ metrics.py                回旋踢案例 K 扫描、FK 与解码一致性诊断
+│  ├─ density.py                低维高斯/KDE 密度估计
+│  ├─ plots.py                  保存的回旋踢集合 → 科学绘图
+│  └─ gifs.py                   保存的回旋踢集合 → Newton 渲染与固定裁剪
+│
+├─ workflows/
+│  └─ spinkick.py               官方回旋踢：采样 → 重采样 → 集合分析 → 清单
+└─ PCA_Result/                  单 motion 缓存，位置保持不变，Git 忽略
 ```
 
-两部分通过 `AnalysisSession` 连接：播放器调用 `session.reconstruct(indices)` 取得完整重建帧，
-调用 `session.save_reconstruction(indices)` 显式保存。播放器不实现 PCA 数学或窗口合并；
-切换成分只重建，不重新拟合。计算部分也可完全独立于窗口运行。
+`data/` 与 `paths.py` 是公共基础；`core/` 和 `smp/` 各自使用基础模块，SMP 不再依赖
+PCA session 来写文件。`workflows/` 负责把它们串起来，案例参数与执行顺序不放进数学核心。
+`reporting/gifs.py` 是需要播放器的媒体导出路径；普通离线 PCA 与统计绘图不创建 Newton 场景。
 
-输入来自仓库 `data/motions/`；生成结果统一进入本目录 `PCA_Result/`。
-Newton 适配层的 UI/暂停桥接位于 `mimickit/engines/newton_engine.py`。
+PCA 与播放器通过 `AnalysisSession` 连接：播放器调用 `session.reconstruct(indices)`
+获取完整帧，调用 `session.save_reconstruction(indices)` 显式保存。集合分析通过
+`CollectionAnalysis.for_clip(index)` 适配到同一接口。窗口合并只由 `core/samples.py` 实现，
+调整成分不重新拟合。
+
+输入来自 `data/motions/`。单文件结果继续保存到本目录 `PCA_Result/`；回旋踢案例结果
+保存到根目录 `report/humanoid_spinkick/assets/`。Git 仅保留该案例的 `analysis.md` 和
+`reproduce.md`，生成资产仍保留在本机。现有六个脚本入口、CLI 参数和缓存格式保持兼容。
+内部 Python 导入已统一到上述子包路径，不保留旧平铺模块的别名；仓库内调用与测试已同步更新。
+Newton 的公共 UI/暂停接口仍位于 `mimickit/engines/newton_engine.py`。
 
 ## 命令速查
 
@@ -78,8 +112,8 @@ python tools/motion_analysis/run_pca.py --motion humanoid/humanoid_getup_faceup.
 
 ### 播放器的 CLI 选项
 
-播放器与 PCA 共用上述入口，没有另一个播放器 CLI。PCA 成分选项决定打开窗口时的初始重建；
-下列选项控制是否播放及播放配置：
+单 motion 的处理与播放共用 `run_pca.py`，PCA 成分选项决定打开窗口时的初始重建。
+集合分析另有仅播放入口 `play_analysis.py`（见下文）。下列选项用于 `run_pca.py`：
 
 | 选项 | 默认值 | 功能 |
 |---|---|---|
@@ -91,6 +125,30 @@ python tools/motion_analysis/run_pca.py --motion humanoid/humanoid_getup_faceup.
 
 `--env-config` 和 `--engine-config` 的相对路径以仓库根目录解析，也可使用绝对路径。
 原始动作和 PCA 结果由入口自动传给播放器，不需要另写动作路径到环境 YAML。
+
+### 集合分析的仅播放入口
+
+已有分析清单可以直接播放，不重新采样或拟合。以下命令要求本地已有回旋踢案例资产：
+
+```powershell
+python tools/motion_analysis/play_analysis.py --manifest report/humanoid_spinkick/assets/data/analysis.json --group generated --clip 0 --mode pose --basis independent --view classroom
+```
+
+| 选项 | 默认值 | 功能 |
+|---|---|---|
+| `--manifest` | 必填 | 保存的 `analysis.json` 清单。 |
+| `--group` | `reference` | 数据组，如 `generated`、`stage_49`。 |
+| `--clip` | `0` | 组内片段编号，从 0 开始。 |
+| `--mode pose\|window` | `pose` | 选择已经保存的分析方式，不在此入口切窗或拟合。 |
+| `--basis shared\|independent` | `shared` | 共享参考基底，或该组自身独立拟合的基底。 |
+| `--selection`、`--components`、`--pcs` | 累计前 `min(4, rank)` 项 | 与单 motion 入口相同的成分选择语义。 |
+| `--view`、`--device` | `comparison`、`cuda:0` | 与上述播放器选项一致。 |
+| `--env-config`、`--engine-config` | 清单配置或 Humanoid/Newton 默认配置 | 可覆盖播放环境与后端。 |
+
+此入口没有 `--play`、`--force`、`--window` 或采样参数；缺少快照时明确报错。
+完整案例参数、图/GIF 对应与仅播放命令见
+[回旋踢复现文档](../../report/humanoid_spinkick/reproduce.md)。生成资产已忽略，只有两份 Markdown
+文档会随 Git 分发；另一台机器需要先生成或取得对应 `assets/data/` 才能使用这些播放命令。
 
 ### 常用参数组合
 

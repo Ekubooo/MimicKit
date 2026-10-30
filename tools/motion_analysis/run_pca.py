@@ -9,14 +9,11 @@ import sys
 from typing import Sequence
 
 
-ROOT = Path(__file__).resolve().parents[2]
-MOTION_ROOT = ROOT / "data" / "motions"
-CACHE_ROOT = Path(__file__).resolve().parent / "PCA_Result"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-# Existing animation modules use repository-relative top-level imports.
-for search_path in (ROOT, ROOT / "mimickit"):
-    if str(search_path) not in sys.path:
-        sys.path.insert(0, str(search_path))
+from tools.motion_analysis.paths import CACHE_ROOT, MOTION_ROOT, ROOT
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -89,9 +86,9 @@ def skeleton_from_env(env_path: Path) -> Path:
 
 def run(args: argparse.Namespace) -> None:
     # Keep Newton and the environment framework off the offline import path.
-    from tools.motion_analysis.report import generate_report
-    from tools.motion_analysis.selection import parse_components, resolve_selection
-    from tools.motion_analysis.session import load_session
+    from tools.motion_analysis.reporting.reconstruction import generate_report
+    from tools.motion_analysis.core.selection import parse_components, resolve_selection
+    from tools.motion_analysis.core.session import load_session
 
     if args.selection == "subset":
         if args.pcs is None:
@@ -138,7 +135,7 @@ def run(args: argparse.Namespace) -> None:
 
     if args.play:
         try:
-            from tools.motion_analysis.playback import play_session
+            from tools.motion_analysis.player.environment import play_session
 
             # Asset loaders in the existing simulator resolve paths from the repo.
             previous_cwd = Path.cwd()

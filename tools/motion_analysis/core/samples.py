@@ -17,7 +17,8 @@ class SampleLayout:
 
 
 def build_samples(features: np.ndarray, mode: str = "pose", window: int = 10,
-                  stride: int = 1) -> tuple[np.ndarray, SampleLayout]:
+                  stride: int = 1, *,
+                  allow_single_window: bool = False) -> tuple[np.ndarray, SampleLayout]:
     features = np.asarray(features, dtype=np.float64)
     if features.ndim != 2 or len(features) < 2 or features.shape[1] < 1:
         raise ValueError("Features require at least two frames and one feature.")
@@ -38,7 +39,7 @@ def build_samples(features: np.ndarray, mode: str = "pose", window: int = 10,
     final_start = len(features) - window
     if starts[-1] != final_start:
         starts = np.append(starts, final_start)
-    if len(starts) < 2:
+    if len(starts) < 2 and not allow_single_window:
         raise ValueError("PCA requires at least two windows; reduce the window length.")
     samples = np.stack([features[start:start + window].reshape(-1) for start in starts])
     return samples, SampleLayout(mode, *features.shape, window, stride, starts)
