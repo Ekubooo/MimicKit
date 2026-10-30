@@ -30,8 +30,19 @@ def read_motion(path: Path) -> MotionData:
     frames = np.asarray(source_frames, dtype=np.float64)
     if frames.ndim != 2 or frames.shape[0] < 2 or frames.shape[1] < 7:
         raise ValueError("Motion frames must have shape [T, 6 + D], with T >= 2 and D >= 1.")
-    if not np.isfinite(frames).all():
-        raise ValueError("Motion contains non-finite frame values.")
+    invalid = ~np.isfinite(frames)
+    if invalid.any():
+        invalid_frames = int(np.count_nonzero(invalid.any(axis=1)))
+        columns = np.flatnonzero(invalid.any(axis=0)).tolist()
+        examples = np.argwhere(invalid)[:5].tolist()
+        raise ValueError(
+            f"Motion contains non-finite frame values: {path}. "
+            f"NaN={int(np.isnan(frames).sum())}, Inf={int(np.isinf(frames).sum())}; "
+            f"affected frames={invalid_frames}/{len(frames)}; "
+            f"columns (0-based)={columns}; first [frame, column] indices (0-based)={examples}. "
+            "Invalid values are already present in the input, before PCA sample construction. "
+            "Use a valid source motion or repair/re-export it from its original data."
+        )
     fps = float(data["fps"])
     if not np.isfinite(fps) or fps <= 0:
         raise ValueError("Motion fps must be finite and positive.")

@@ -3,8 +3,7 @@
 from collections import deque
 from typing import Any
 
-
-PCA_FONT_INCREMENT_PX = 2.0
+from .playback_view import VIEW_LABELS, VIEW_MODES, cumulative_selections
 
 
 class PlaybackControls:
@@ -13,10 +12,14 @@ class PlaybackControls:
     MODES = ("cumulative", "single", "subset")
     MODE_LABELS = ("First K components", "Single component", "Selected components")
 
-    def __init__(self, session: Any, initial_indices: tuple[int, ...], mode: str):
+    def __init__(self, session: Any, initial_indices: tuple[int, ...], mode: str,
+                 *, view: str = "comparison"):
         if mode not in self.MODES:
             raise ValueError(f"Unknown selection mode: {mode}")
+        if view not in VIEW_MODES:
+            raise ValueError(f"Unknown playback view: {view}")
         self.session = session
+        self.view = view
         self.mode = mode
         self.active_indices = tuple(initial_indices)
         self.k = (initial_indices[0] + 1 if mode == "single" and initial_indices
@@ -30,6 +33,25 @@ class PlaybackControls:
         self._pending_indices: tuple[int, ...] | None = None
         self._actions: deque[str] = deque()
         self._save_requested = False
+        self._pending_view: str | None = None
+        self._camera_reset = False
+
+    def request_view(self, view: str) -> None:
+        if view not in VIEW_MODES:
+            raise ValueError(f"Unknown playback view: {view}")
+        if view != self.view:
+            self._pending_view = view
+
+    def take_view_request(self) -> str | None:
+        view, self._pending_view = self._pending_view, None
+        return view
+
+    def request_camera_reset(self) -> None:
+        self._camera_reset = True
+
+    def take_camera_reset(self) -> bool:
+        requested, self._camera_reset = self._camera_reset, False
+        return requested
 
     @property
     def captures_keyboard(self) -> bool:
@@ -104,23 +126,24 @@ class PlaybackControls:
             # imgui.ini in the repository's working directory on viewer exit.
             imgui.get_io().set_ini_filename(None)
         self._imgui = imgui
-        # PushFont is scoped to these widgets; do not change the viewer's style
-        # or font atlas. Account for DPI so the displayed increase is two pixels.
-        base_size = imgui.get_style().font_size_base
-        scale = imgui.get_font_size() / base_size
-        imgui.push_font(None, base_size + PCA_FONT_INCREMENT_PX / scale)
-        try:
-            self._draw_contents(imgui)
-        finally:
-            imgui.pop_font()
+        self._draw_contents(imgui)
 
     def _draw_contents(self, imgui: Any) -> None:
-        """Draw only the PCA section inside the temporary font scope."""
+        """Draw the PCA section using the engine's shared default font."""
         imgui.separator()
         imgui.text("PCA motion comparison")
-        imgui.text("Blue: original | Orange: reconstruction")
-        imgui.text(f"Source: {self.session.source.path.name}")
+        changed, view_index = imgui.combo("View", VIEW_MODES.index(self.view), list(VIEW_LABELS))
+        if changed:
+            self.request_view(VIEW_MODES[view_index])
+        layout = getattr(self.session, "layout", None)
+        if layout is not None:
+            imgui.text(f"Analysis: {layout.mode} PCA")
+        imgui.text_wrapped(f"Source: {self.session.source.path.name}")
         imgui.text(f"Time: {self.time:.3f} s")
+        if self.view != "comparison":
+            imgui.text_wrapped("Fixed root position, height and rotation. Camera locked.")
+            if imgui.button("Restore standard camera"):
+                self.request_camera_reset()
 
         if imgui.button("Play" if self.paused else "Pause"):
             self.request_action("play" if self.paused else "pause")
@@ -131,6 +154,26 @@ class PlaybackControls:
         if imgui.button("Restart"):
             self.request_action("restart")
 
+        if self.view == "classroom":
+            imgui.text_wrapped("Top / Blue: full local joint motion")
+            for position, color, indices in zip(
+                    ("Bottom left", "Bottom center", "Bottom right"),
+                    ("Orange", "Green", "Purple"), cumulative_selections(self.session.max_components)):
+                variance = float(sum(self.session.variance_ratio[i] for i in indices))
+                imgui.text_wrapped(f"{position} / {color}: K={len(indices)}, variance {variance:.2%}")
+            imgui.text_wrapped("Each reconstruction includes the mean. Custom selection is preserved.")
+        else:
+            imgui.text_wrapped("Blue: original | Orange: reconstruction")
+            self._draw_selection(imgui)
+
+        cache_state = "loaded from cache" if self.session.fit_cache_hit else "fitted this run"
+        imgui.text(f"PCA model: {cache_state}")
+        imgui.text_wrapped(self.status)
+        if self.error:
+            imgui.text_wrapped(f"Error: {self.error}")
+        imgui.text_wrapped("Enter: play/pause | Space: one step")
+
+    def _draw_selection(self, imgui: Any) -> None:
         changed, mode_index = imgui.combo(
             "Selection mode", self.MODES.index(self.mode), list(self.MODE_LABELS))
         if changed:
@@ -139,13 +182,23 @@ class PlaybackControls:
         maximum = self.session.max_components
         if self.mode == "subset":
             _, self.component_text = imgui.input_text("Components", self.component_text)
-            imgui.text("Examples: 1,3,5-8. Empty selection means mean reconstruction.")
+            imgui.text_wrapped("Examples: 1,3,5-8. Empty selection means mean reconstruction.")
             if imgui.button("Apply selection"):
                 self.request_selection()
         elif maximum > 0:
             minimum = 1 if self.mode == "single" else 0
             self.k = min(max(self.k, minimum), maximum)
+            slider_width = imgui.calc_item_width()
             changed, self.k = imgui.slider_int("K", self.k, minimum, maximum)
+            gap = imgui.get_style().item_spacing.x
+            button_size = imgui.ImVec2(max(1.0, (slider_width - gap) / 2.0), 0.0)
+            if imgui.button("-1", button_size):
+                self.k = max(minimum, self.k - 1)
+                changed = True
+            imgui.same_line()
+            if imgui.button("+1", button_size):
+                self.k = min(maximum, self.k + 1)
+                changed = True
             if changed:
                 self.request_selection()
         else:
@@ -160,9 +213,3 @@ class PlaybackControls:
         label = ", ".join(str(index + 1) for index in self.active_indices) or "mean only"
         imgui.text_wrapped(f"Active components: {label}")
         imgui.text(f"Selected variance: {self.selected_variance:.2%}")
-        cache_state = "loaded from cache" if self.session.fit_cache_hit else "fitted this run"
-        imgui.text(f"PCA model: {cache_state}")
-        imgui.text_wrapped(self.status)
-        if self.error:
-            imgui.text_wrapped(f"Error: {self.error}")
-        imgui.text("Enter: play/pause | Space: one step")

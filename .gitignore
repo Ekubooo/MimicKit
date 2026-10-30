@@ -6,4 +6,5 @@ __pycache__/
 output/
 .vscode/
 wandb/
+tmp/
 tools/motion_analysis/PCA_Result/

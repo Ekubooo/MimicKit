@@ -61,6 +61,23 @@ class PcaCliTests(unittest.TestCase):
         self.assertEqual(self.invoke("--components", "99"), 1)
         self.assertIn("PCA error:", self.errors.getvalue())
 
+    def test_nonfinite_input_reports_locations_before_fitting_or_playback(self):
+        data = pickle.loads(self.source.read_bytes())
+        data["frames"][2, 7] = np.nan
+        data["frames"][5, 8] = np.inf
+        original = pickle.dumps(data)
+        self.source.write_bytes(original)
+        with patch("tools.motion_analysis.session.fit_pca", side_effect=AssertionError("Fitted invalid input")):
+            self.assertEqual(self.invoke("--mode", "window", "--play"), 1)
+        message = self.errors.getvalue()
+        self.assertIn(str(self.source), message)
+        self.assertIn("NaN=1, Inf=1", message)
+        self.assertIn("affected frames=2/18", message)
+        self.assertIn("columns (0-based)=[7, 8]", message)
+        self.assertIn("[[2, 7], [5, 8]]", message)
+        self.assertFalse((self.root / "cache").exists())
+        self.assertEqual(self.source.read_bytes(), original)
+
     def test_subset_requires_its_own_selection_argument(self):
         self.assertEqual(self.invoke("--selection", "subset"), 1)
         self.assertIn("requires --pcs", self.errors.getvalue())
@@ -69,6 +86,12 @@ class PcaCliTests(unittest.TestCase):
     def test_empty_subset_is_mean_only(self):
         self.assertEqual(self.invoke("--selection", "subset", "--pcs", ""), 0, self.errors.getvalue())
         self.assertIn("Selected components: mean only", self.output.getvalue())
+
+    def test_playback_view_is_forwarded_without_affecting_offline_selection(self):
+        with patch("tools.motion_analysis.playback.play_session") as play:
+            self.assertEqual(self.invoke("--view", "classroom", "--play", "--components", "2"), 0)
+        self.assertEqual(play.call_args.kwargs["view"], "classroom")
+        self.assertEqual(play.call_args.args[1], (0, 1))
 
     def test_input_resolution_is_independent_of_working_directory(self):
         with patch.object(run_pca, "MOTION_ROOT", self.motion_root):

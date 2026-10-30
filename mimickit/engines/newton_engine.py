@@ -766,6 +766,20 @@ class NewtonEngine(engine.Engine):
     
     def get_sim_state(self):
         return self._sim_state
+
+    def get_viewer(self):
+        """Expose the viewer to opt-in tool adapters without changing its owner."""
+        return self._viewer
+
+    def set_viewer_world_offsets(self, offsets):
+        """Change display placement only; preserve the picking array's identity."""
+        offsets = np.asarray(offsets, dtype=np.float32)
+        if offsets.shape != (self._num_envs, 3) or not np.isfinite(offsets).all():
+            raise ValueError("Viewer offsets must be finite with shape [num_envs, 3].")
+        if self._viewer is not None:
+            self._viewer.world_offsets.assign(offsets)
+            self._camera_offsets = offsets.copy()
+        return
     
     def set_body_color(self, env_id, obj_id, body_id, color, viewer=None):
         if (viewer is None):
@@ -788,6 +802,13 @@ class NewtonEngine(engine.Engine):
         viewer.set_model(self._sim_model)
         viewer.set_world_offsets([env_spacing, env_spacing, 0.0])
         self._apply_obj_colors(viewer)
+        # Set the default for the whole Newton UI, including tool callbacks.
+        # Keep this in MimicKit so the installed Newton package stays untouched.
+        ui = viewer.ui
+        if ui is not None and ui.is_available:
+            font_config = ui.imgui.ImFontConfig()
+            font_config.size_pixels = 18.0
+            ui.io.font_default = ui.io.fonts.add_font_default(font_config)
         return
 
     def draw_lines(self, env_id, start_verts, end_verts, cols, line_width):

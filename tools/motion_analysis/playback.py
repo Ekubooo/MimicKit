@@ -11,6 +11,9 @@ from typing import Any
 import numpy as np
 
 from tools.motion_analysis.playback_controls import PlaybackControls
+from tools.motion_analysis.playback_view import (
+    ACTOR_COLORS, FixedCamera, build_layout, cumulative_selections,
+)
 
 
 # Display spacing belongs to this comparison tool, not the shared engine YAML.
@@ -60,7 +63,7 @@ class ComparisonCamera:
         else:
             delta = camera_pos - self.target
 
-        roots = self.engine.get_root_pos(self.obj_id).detach().cpu().numpy()
+        roots = self.engine.get_root_pos(self.obj_id)[:2].detach().cpu().numpy()
         target = np.mean(roots, axis=0) + self.offset
         target[2] = self.target[2]
         self.target = target
@@ -77,27 +80,44 @@ def _environment_types():
     import envs.view_motion_env as view_motion_env
 
     class InMemoryMotionLib(motion_lib.MotionLib):
-        """Reuse all standard interpolation/FK preparation with two memory clips."""
+        """Reuse standard interpolation with an optional bank of PCA clips."""
 
-        def __init__(self, source: Any, reconstructed: np.ndarray, model: Any, device: str):
+        def __init__(self, source: Any, reconstructed: np.ndarray, model: Any, device: str,
+                     additional_clips: tuple[np.ndarray, ...] = ()):
             self._source = source
             self._reconstructed = reconstructed
+            self._additional_clips = additional_clips
+            self.local_root_height: float | None = None
             super().__init__(str(source.path), model, device)
 
         def _load_motion_pkl(self, motion_file):
-            self._motion_files = [str(self._source.path), "<PCA reconstruction>"]
-            self._motion_weights = torch.ones(2, dtype=torch.float32, device=self._device)
+            clips = (self._source.frames, self._reconstructed, *self._additional_clips)
+            count = len(clips)
+            self._motion_files = [str(self._source.path)] + ["<PCA reconstruction>"] * (count - 1)
+            self._motion_weights = torch.ones(count, dtype=torch.float32, device=self._device)
             self._motion_fps = torch.full(
-                (2,), float(self._source.fps), dtype=torch.float32, device=self._device)
+                (count,), float(self._source.fps), dtype=torch.float32, device=self._device)
             self._motion_num_frames = torch.tensor(
-                [len(self._source.frames)] * 2, dtype=torch.long, device=self._device)
+                [len(self._source.frames)] * count, dtype=torch.long, device=self._device)
             self._motion_loop_modes = torch.full(
-                (2,), int(self._source.loop_mode), dtype=torch.int, device=self._device)
-            poses = [self._extract_frame_data(frames)
-                     for frames in (self._source.frames, self._reconstructed)]
+                (count,), int(self._source.loop_mode), dtype=torch.int, device=self._device)
+            poses = [self._extract_frame_data(frames) for frames in clips]
             self._frame_root_pos = torch.cat([pose[0] for pose in poses], dim=0)
             self._frame_root_rot = torch.cat([pose[1] for pose in poses], dim=0)
             self._frame_joint_rot = torch.cat([pose[2] for pose in poses], dim=0)
+
+        def calc_motion_frame(self, motion_ids, motion_times):
+            sampled = super().calc_motion_frame(motion_ids, motion_times)
+            if self.local_root_height is None:
+                return sampled
+            root_pos, root_rot, root_vel, root_ang_vel, joint_rot, dof_vel = sampled
+            # A display transform after interpolation/loop offsets, before FK.
+            root_pos = torch.zeros_like(root_pos)
+            root_pos[..., 2] = self.local_root_height
+            root_rot = torch.zeros_like(root_rot)
+            root_rot[..., 3] = 1.0
+            return (root_pos, root_rot, torch.zeros_like(root_vel),
+                    torch.zeros_like(root_ang_vel), joint_rot, dof_vel)
 
     class PcaPlaybackEnv(view_motion_env.ViewMotionEnv):
         """Add PCA selection controls while retaining the ordinary playback logic."""
@@ -106,11 +126,24 @@ def _environment_types():
             self.session = session
             self.controls = controls
             self._reconstructed = self._checked_reconstruction(controls.active_indices)
+            self._classroom_frames = tuple(self._checked_reconstruction(indices)
+                                           for indices in cumulative_selections(session.max_components))
             engine_config = dict(engine_config, env_spacing=COMPARISON_SPACING)
             self._spacing = float(engine_config["env_spacing"])
-            super().__init__(env_config, engine_config, 2, device, True)
+            super().__init__(env_config, engine_config, 4, device, True)
+            from tools.motion_analysis.playback_renderer import PlaybackRenderer
+
+            self._display_renderer = PlaybackRenderer(self._engine, lambda: self._camera.update())
+            self._display_renderer.configure(self._view_layout, controls.view)
             self._pause_bridge = PauseBridge(self._engine)
             self._pause_bridge.publish(False)
+
+        def close(self):
+            renderer = getattr(self, "_display_renderer", None)
+            if renderer is not None:
+                renderer.close()
+                self._display_renderer = None
+            super().close()
 
         def _checked_reconstruction(self, indices):
             frames = np.asarray(self.session.reconstruct(indices), dtype=np.float32)
@@ -123,19 +156,32 @@ def _environment_types():
 
         def _load_motions(self, motion_file):
             self._motion_lib = InMemoryMotionLib(
-                self.session.source, self._reconstructed, self._kin_char_model, self._device)
+                self.session.source, self._reconstructed, self._kin_char_model, self._device,
+                self._classroom_frames)
+            self._configure_motion_view()
+
+        def _configure_motion_view(self):
+            local = self.controls.view != "comparison"
+            self._motion_lib.local_root_height = (float(self.session.source.frames[0, 2])
+                                                  if local else None)
+            ids = [0, 2, 3, 4] if self.controls.view == "classroom" else [0, 1, 2, 3]
+            self._display_motion_ids = torch.tensor(ids, dtype=torch.long, device=self._device)
+
+        def _get_env_motion_ids(self):
+            return self._display_motion_ids
 
         def _build_character(self, env_id, env_config, color=None):
-            colors = (np.array([0.15, 0.45, 0.9]), np.array([0.95, 0.45, 0.1]))
-            return super()._build_character(env_id, env_config, color=colors[env_id])
+            return super()._build_character(env_id, env_config, color=np.array(ACTOR_COLORS[env_id]))
 
         def _build_camera(self, env_config):
-            from newton.utils import compute_world_offsets
-
-            offsets = np.asarray(compute_world_offsets(
-                2, (self._spacing, self._spacing, 0.0), self._engine.get_sim_model().up_axis))
-            self._camera = ComparisonCamera(
-                self._engine, self.session.source.frames[0, :3], offsets, self._get_char_id())
+            layout = build_layout("comparison", float(self.session.source.frames[0, 2]), self._spacing)
+            self._engine.set_viewer_world_offsets(layout.offsets)
+            self._comparison_camera = ComparisonCamera(
+                self._engine, self.session.source.frames[0, :3], layout.offsets[:2], self._get_char_id())
+            self._view_layout = build_layout(
+                self.controls.view, float(self.session.source.frames[0, 2]), self._spacing)
+            self._camera = (self._comparison_camera if self.controls.view == "comparison"
+                            else FixedCamera(self._engine, self._view_layout))
 
         def _setup_gui(self):
             def shortcut(action):
@@ -149,7 +195,7 @@ def _environment_types():
             self._engine.register_ui_callback(self.controls.draw, position="side")
 
         def reset(self, env_ids=None):
-            # A comparison always resets both characters on the same timeline.
+            # All display slots always reset on the same timeline.
             super().reset(None)
             self._sync_motion()
             self._update_observations()
@@ -182,17 +228,40 @@ def _environment_types():
             try:
                 reconstructed = self._checked_reconstruction(indices)
                 library = InMemoryMotionLib(
-                    self.session.source, reconstructed, self._kin_char_model, self._device)
+                    self.session.source, reconstructed, self._kin_char_model, self._device,
+                    self._classroom_frames)
             except (ValueError, RuntimeError, OSError) as exc:
                 self.controls.error = str(exc)
                 return
             self._reconstructed = reconstructed
             self._motion_lib = library
+            self._configure_motion_view()
             self.controls.selection_applied(indices)
             self._sync_motion()
 
+        def _apply_view(self):
+            view = self.controls.take_view_request()
+            reset_camera = self.controls.take_camera_reset()
+            if view is None and not reset_camera:
+                return
+            if self.controls.view == "comparison":
+                self._comparison_camera.update()
+            if view is not None:
+                self.controls.view = view
+            self._view_layout = build_layout(
+                self.controls.view, float(self.session.source.frames[0, 2]), self._spacing)
+            self._display_renderer.configure(self._view_layout, self.controls.view)
+            self._configure_motion_view()
+            if self.controls.view == "comparison":
+                self._camera = self._comparison_camera
+                self._engine.set_camera_pose(self._camera.pos, self._camera.target)
+            else:
+                self._camera = FixedCamera(self._engine, self._view_layout)
+            self._sync_motion()
+            self._display_renderer.log_state(self._engine.get_sim_state().raw_state)
+
         def _save_selection(self):
-            if self.controls.take_save_request():
+            if self.controls.take_save_request() and self.controls.view != "classroom":
                 try:
                     path = self.session.save_reconstruction(self.controls.active_indices)
                     self.controls.status = f"Saved: {path}"
@@ -217,6 +286,7 @@ def _environment_types():
                 self.controls.paused = mode != sim_env.PlayMode.PLAY
 
             # These run for every render, including the parent's paused render loop.
+            self._apply_view()
             self._apply_selection()
             self._save_selection()
 
@@ -225,7 +295,7 @@ def _environment_types():
 
 def play_session(session: Any, initial_indices: tuple[int, ...], *,
                  selection_mode: str = "cumulative", env_config: Path,
-                 engine_config: Path, device: str = "cuda:0") -> None:
+                 engine_config: Path, device: str = "cuda:0", view: str = "comparison") -> None:
     """Play source and selected PCA reconstruction with one shared clock."""
     root = Path(__file__).resolve().parents[2]
     if str(root / "mimickit") not in sys.path:
@@ -239,7 +309,7 @@ def play_session(session: Any, initial_indices: tuple[int, ...], *,
         raise ValueError("Interactive PCA playback currently requires the Newton engine.")
     environment = dict(environment)
     environment["motion_file"] = str(session.source.path)
-    controls = PlaybackControls(session, tuple(initial_indices), selection_mode)
+    controls = PlaybackControls(session, tuple(initial_indices), selection_mode, view=view)
     _, environment_type = _environment_types()
     env = None
     try:
@@ -247,7 +317,7 @@ def play_session(session: Any, initial_indices: tuple[int, ...], *,
         env = environment_type.__new__(environment_type)
         env.__init__(session, controls, environment, dict(engine), device)
         env.reset()
-        action = torch.zeros((2, *env.get_action_space().shape), device=device)
+        action = torch.zeros((env.get_num_envs(), *env.get_action_space().shape), device=device)
         with torch.no_grad():
             while True:
                 _, _, done, _ = env.step(action)

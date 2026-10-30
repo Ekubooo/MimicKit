@@ -112,14 +112,13 @@ class PlaybackControlTests(unittest.TestCase):
                              set_ini_filename=ini_targets.append)
         ui = SimpleNamespace(
             get_io=lambda: io,
-            get_style=lambda: SimpleNamespace(font_size_base=13.0),
-            get_font_size=lambda: 13.0,
-            push_font=lambda font, size: None,
-            pop_font=lambda: None,
             separator=lambda: None,
             text=lambda text: None,
             text_wrapped=lambda text: None,
-            button=lambda label: False,
+            button=lambda label, size=None: False,
+            calc_item_width=lambda: 200.0,
+            get_style=lambda: SimpleNamespace(item_spacing=SimpleNamespace(x=8.0)),
+            ImVec2=lambda x, y: (x, y),
             same_line=lambda: None,
             combo=lambda label, index, labels: (False, index),
             slider_int=lambda label, value, minimum, maximum: (False, value),
@@ -128,43 +127,15 @@ class PlaybackControlTests(unittest.TestCase):
         self.controls.draw(ui)
         self.assertEqual(ini_targets, [None])
 
-    def test_font_increase_is_local_and_restored_even_on_draw_failure(self):
-        # A 2x DPI scale must still add exactly two displayed pixels. Simulate
-        # another viewer section after drawing, including the exception path.
-        for fail in (False, True):
-            with self.subTest(draw_failure=fail):
-                style = SimpleNamespace(font_size_base=13.0)
-                stack = []
-
-                def push_font(font, size):
-                    self.assertIsNone(font)
-                    stack.append(style.font_size_base)
-                    style.font_size_base = size
-
-                def pop_font():
-                    style.font_size_base = stack.pop()
-
-                ui = SimpleNamespace(
-                    get_io=lambda: SimpleNamespace(set_ini_filename=lambda path: None),
-                    get_style=lambda: style,
-                    get_font_size=lambda: style.font_size_base * 2.0,
-                    push_font=push_font,
-                    pop_font=pop_font,
-                )
-
-                def draw_contents(imgui):
-                    self.assertAlmostEqual(imgui.get_font_size(), 28.0)
-                    if fail:
-                        raise RuntimeError("draw failed")
-
-                self.controls._draw_contents = draw_contents
-                if fail:
-                    with self.assertRaisesRegex(RuntimeError, "draw failed"):
-                        self.controls.draw(ui)
-                else:
-                    self.controls.draw(ui)
-                self.assertEqual(stack, [])
-                self.assertEqual(ui.get_font_size(), 26.0)
+    def test_pca_inherits_engine_font_without_an_extra_size_override(self):
+        ui = SimpleNamespace(
+            get_io=lambda: SimpleNamespace(set_ini_filename=lambda path: None),
+            get_font_size=lambda: 18.0,
+        )
+        sizes = []
+        self.controls._draw_contents = lambda imgui: sizes.append(imgui.get_font_size())
+        self.controls.draw(ui)
+        self.assertEqual(sizes, [18.0])
 
 
 class PauseBridgeTests(unittest.TestCase):
@@ -190,6 +161,8 @@ class EnvironmentAdapterTests(unittest.TestCase):
 
         env = self.environment_type.__new__(self.environment_type)
         env.session = FakeSession()
+        env._device = "cpu"
+        env._classroom_frames = tuple(env.session.source.frames.copy() for _ in range(3))
         env.controls = PlaybackControls(env.session, (0,), "cumulative")
         env._play_mode = PlayMode.PAUSE
         env._time_buf = torch.tensor([0.2, 0.2])

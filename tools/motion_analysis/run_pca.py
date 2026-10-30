@@ -39,6 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", default="v1", help="Human-readable analysis version label.")
     parser.add_argument("--force", action="store_true", help="Recompute the current analysis and selection.")
     parser.add_argument("--play", action="store_true", help="Open the interactive Original/Reconstructed viewer.")
+    parser.add_argument("--view", choices=("comparison", "local", "classroom"), default="comparison",
+                        help="Playback layout: original motion, fixed-root pair, or full / K=1,2,3.")
     parser.add_argument(
         "--env-config", type=Path,
         default=ROOT / "data/envs/view_motion_humanoid_env.yaml",
@@ -143,7 +145,7 @@ def run(args: argparse.Namespace) -> None:
             try:
                 os.chdir(ROOT)
                 play_session(
-                    session, indices, selection_mode=args.selection, env_config=env_path,
+                    session, indices, selection_mode=args.selection, view=args.view, env_config=env_path,
                     engine_config=resolve_repo_path(args.engine_config), device=args.device,
                 )
             finally:
