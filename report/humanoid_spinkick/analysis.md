@@ -1,129 +1,273 @@
-# 官方 Humanoid 回旋踢：SMP 解码与 PCA 分析
+# Humanoid Spinkick: What PCA Reveals About a Frozen SMP Prior
 
-本案例把官方回旋踢动作与官方 diffusion prior 生成片段放在同一条分析链中：**采样 → 原生动作解码 → pose/window PCA → 共享基底投影 → 播放与绘图**。原有单文件 PCA、缓存和三种交互视图保留。本轮没有训练模型、运行控制策略或执行远程操作。参数与仅播放命令见 [reproduce.md](reproduce.md)。
+**English source edition.** [中文译本](analysis.zh-CN.md) · [Experiment record and playback commands](reproduce.md)
 
-主要观察：原始与生成组的 pose 压缩曲线接近；窗口压缩曲线存在差异。最终生成数据在参考 PCA 的前两个坐标上主要沿参考轨迹分布。最早记录的 t=49 干净动作估计较散，后续估计逐渐集中到动作区域。这些是本次有限样本的描述，不能据此判断完整分布或物理控制质量。
+A motion recording is a sequence of body poses. This report compares an official recorded kick with 512 short clips produced by an already trained motion generator. PCA provides a common way to inspect what varies, what a few components can recover, and how generated samples relate to the recording. It also examines intermediate estimates made while the generator removes noise.
 
-## 1. 数据与计算方法
+The intended reader knows basic PCA but may be new to motion data, probability and machine learning. Start with the reader guide, then use G01–G02 for compression, G08–G09 for distributions and G10–G11 for denoising. The GIFs connect those measurements to visible poses. Sections 6–7 retain decoding and implementation details for later inspection.
 
-| 数据组 | 片段数 | 每片段帧数 | FPS | 时间戳跨度 | pose 样本 | window 样本 |
+## Reader guide
+
+### A. A pose, a clip and a moving skeleton
+
+The Humanoid is an articulated skeleton: connected rigid bodies with joints. A **pose** describes the body at one instant; a **motion clip** is a time-ordered sequence of poses. The player reads numerical joint coordinates, uses the skeleton to compute body positions, and draws the result. It is not playing a camera video.
+
+A **degree of freedom (DOF)** is an independent coordinate allowed by a joint. A knee hinge has one angular DOF; a ball-like joint needs three rotation coordinates. This asset has 28 local DOFs. Its **root** additionally describes the whole body's position and orientation. Moving the root moves the character as a whole; changing local DOFs changes its posture. **Forward kinematics (FK)** turns root and joint coordinates into body positions using known bone connections and lengths. This geometric calculation does not test whether a character could balance or produce the required forces.
+
+The native motion format stores those coordinates directly. FPS means frames per second. In this report, a ten-frame generated clip is only a short part of an action, not a complete kick. Pose PCA compares individual poses; window PCA also retains their local order within a short sequence.
+
+### B. Observed points, distributions and probability density
+
+Imagine collecting the right-knee angle from every frame. A histogram shows which ranges occur often. Keeping knee and hip angles instead gives one point per frame in a two-dimensional plane. Our scatter plots use two PCA coefficients rather than two named joint angles, so they summarize more of the body's variation.
+
+A **distribution** describes how observations or samples occupy this space. For a finite collection, the empirical probability of a region is its fraction of sampled points. A **density estimate** replaces the discrete points with a smooth surface. Probability is the integral over a region, not the height at one exact pose. This also explains why a probability-density axis has units.
+
+Three objects must remain separate: the observed finite dataset, the high-dimensional distribution represented by the learned generator, and the low-dimensional Gaussian/KDE estimate drawn from projected samples. The plots show the third object alongside the first. They do not directly evaluate the generator's full probability density. A slow part of a recorded motion can contribute many similar frames; a dense area therefore need not indicate better motion.
+
+### C. ML, DL, RL and a motion prior
+
+**Machine learning (ML)** learns patterns or model parameters from examples. **Deep learning (DL)** uses neural networks with multiple learned layers; the motion generator here is such a model. PCA also fits a representation from data, but this tool computes it directly by singular value decomposition (SVD), a matrix factorization, rather than training a neural network. **Reinforcement learning (RL)** learns a decision rule through interaction and reward. RL can use deep networks; it is not a mandatory next stage after DL. These distinctions follow the introductory treatments in the [Deep Learning textbook](https://www.deeplearningbook.org/contents/intro.html) and [Sutton and Barto's RL textbook](https://mitpress.ublish.com/book/reinforcement-learning-an-introduction-2).
+
+A **policy** maps observations of a simulated character to control actions. Its actions influence the next state through physics. A **motion prior** encodes motion patterns learned from examples and can guide what movements should be preferred. **Frozen** means its learned parameters are held fixed. Here an official checkpoint, a file of previously learned parameters, is loaded for sampling; its parameters are not trained again.
+
+### D. Diffusion generation and the SMP connection
+
+During diffusion-model training, clean examples are corrupted with different amounts of noise and a network learns denoising predictions. At generation time, new random noise is repeatedly updated into a structured sample. It is not necessary to start from a particular recorded clip and recover that same clip. The 50 denoising steps in this case are inference steps, not training epochs. This is the basic distinction between training and sampling in [DDPM](https://arxiv.org/abs/2006.11239).
+
+**SMP means Score-Matching Motion Priors.** Its framework uses a frozen diffusion model to construct a motion-imitation reward through score distillation sampling (SDS), then trains a control policy with that reward. In this case we inspect direct samples from the prior, not that policy. See the [SMP paper](https://arxiv.org/abs/2512.03028).
+
+The statistical **score** is a vector, $s_t(x)=\nabla_x\log p_t(x)$: it describes the local direction in which a noisy-motion density increases. Here x is the motion-feature vector, $p_t$ the noisy-motion density at level t, and $\nabla_x$ the vector of derivatives with respect to those coordinates. It is different from a **PCA score**, which is a coordinate along a principal component. Our figures use PCA scores; they do not plot the SMP reward or the diffusion score field.
+
+```mermaid
+flowchart LR
+    R["Recorded motion"] --> A["Reference collection"]
+    P["Official pretrained diffusion prior"] --> S["Denoising sampling"]
+    S --> G["Generated clips"]
+    A --> C["PCA comparison"]
+    G --> C
+    C --> V["Plots and motion replay"]
+```
+
+The report uses three distinct operations: **sampling** produces a clip with the generator; **decoding** converts generated features into native motion coordinates; **PCA reconstruction** approximates an existing clip from selected components. The density surfaces are a separate visualization step after PCA projection.
+
+## Findings at a glance
+
+The main findings are:
+
+- Pose PCA has similar compression curves for the reference and generated collections. At K=3, the retained variance is 77.06% and 77.49%, respectively.
+- Window PCA separates the collections more clearly. The reference has only 30 windows and a numerical rank of 29; the generated collection has 512 windows and a rank of 280. These ranks describe this dataset and representation, not a quality score.
+- The final generated poses mostly follow the reference trajectory in its first two PCA coordinates. Early clean estimates at diffusion timestep 49 are much more dispersed. Neither observation establishes physical validity or coverage of the full motion distribution.
+
+These results concern direct samples from a frozen prior. No training, control-policy execution or remote operation was performed. This report is an exploratory case study, not an independent evaluation of SMP control performance.
+
+## 1. Experiment design
+
+This section defines what one data point means and which comparisons are valid. The experiment uses existing recordings and a trained generator, then performs offline analysis. It does not learn a new controller. The table distinguishes physical clip length from the number of numerical samples used to fit PCA.
+
+### Data and sampling
+
+| Collection | Clips | Frames per clip | FPS | First-to-last timestamp | Pose matrix | Window matrix |
 |---|---:|---:|---:|---:|---:|---:|
-| 官方原始文件 | 1 | 78 | 60 | 1.28333 s | 本轮先重采样 | 本轮先重采样 |
-| reference：规则时间网格 | 1 | 39 | 30 | 1.26667 s | 39×28 | 30×280 |
-| generated：最终 prior 样本 | 512 | 10 | 30 | 0.30000 s | 5120×28 | 512×280 |
-| 各 stage：同一批样本的干净估计 | 512 | 10 | 30 | 0.30000 s | 5120×28 | 512×280 |
+| Official source file | 1 | 78 | 60 | 1.28333 s | Resampled before analysis | Resampled before analysis |
+| `reference` | 1 | 39 | 30 | 1.26667 s | 39 × 28 | 30 × 280 |
+| `generated` | 512 | 10 | 30 | 0.30000 s | 5120 × 28 | 512 × 280 |
+| Each `stage_*` | 512 | 10 | 30 | 0.30000 s | 5120 × 28 | 512 × 280 |
 
-原始文件为 `data/motions/humanoid/humanoid_spinkick.pkl`，模型为 `data/models/smp_priors/smp_prior_spinkick.pt`。采用 EMA、DDPM 50 步、seed=0、batch=64。没有复制权重到报告目录。原始文件内容与 60 FPS 元数据保持不变；分析副本通过现有 `MotionLib` 的位置/旋转插值采样到规则 30 FPS 网格，未补入不规则末帧。
+The source is `data/motions/humanoid/humanoid_spinkick.pkl`; the checkpoint is `data/models/smp_priors/smp_prior_spinkick.pt`. Sampling uses EMA weights, the existing DDPM scheduler with 50 steps, seed 0 and batches of 64. Model weights are not copied into the report directory.
 
-**PCA 的一个样本是什么？** pose 的一行是一个姿态的 28 个局部原生 DOF；window 的一行是连续 H=10 帧展平后的 280 个 DOF 坐标，stride=1。每个片段单独切窗，不跨片段连接；10 帧生成片段恰好提供一个合法窗口。原始组与生成组样本数不同，并未人为复制参考样本来配平。
+EMA (exponential moving average) selects weights smoothed over earlier training updates. DDPM (denoising diffusion probabilistic model) names the sampling process; its scheduler sets the noise levels and update rule. A seed initializes the random-number generator, and batch size controls how many independent clip samples are processed together. Neither is the clip's frame count.
 
-计算沿用 float64 中心化 SVD，不标准化、不 whitening。设样本为 x，均值为 μ，主成分为 u，投影系数为 z，则重建是 `μ + Σ z_k u_k`；均值只加一次，K=0 即均值重建。窗口重建在原片段内等权重叠平均。root 前六维不参与 PCA，重建保留各片段的 root、帧数、FPS 与循环模式。原生球关节的坐标是指数映射分量，不应逐项解释为 Euler 角或真实单轴关节角。
+The reference is sampled on a regular 30 FPS grid through MimicKit's existing `MotionLib` interpolation. No irregular endpoint is appended, which explains the slightly shorter analyzed duration. The original 60 FPS file remains unchanged. Generated clips retain their individual boundaries and are never concatenated into an artificial full-length kick.
 
-**两类实验分开使用：**
+### Representation and reconstruction
 
-- **独立拟合**：reference 与 generated 分别拟合 pose/window，用于解释方差、K 扫描、载荷和自身重建误差。不同组的 PC 轴不能直接当作同一坐标。
-- **共享基底**：只在 reference 拟合，将 reference、generated、六个 stage 投影到这个均值与基底上，用于轨迹、散点、直方图和密度比较。不再为生成组重新选择坐标系。
+Pose PCA treats one frame's 28 local native degrees of freedom (DOFs) as a sample. Window PCA flattens H=10 consecutive frames into 280 coordinates, using stride 1. Windows are built separately within each clip. A generated clip therefore contributes exactly one window, while the reference contributes 30 overlapping windows. Reference samples are not duplicated to match the generated sample count.
 
-DOF 指标为原生坐标 RMSE（rad）；FK 指标为沿用 MimicKit CPU FK 得到的身体原点欧氏距离 RMSE（cm），对全部帧和身体等权。FK 使用 float32。指标始终把每个动作的 PCA 重建与**该动作自身**比较；随机生成片段与原始长片段没有时间配对，因此不计算两者逐帧“真实误差”。本轮不 unwrap 指数映射、不裁剪关节限位、不放大 PCA 系数。最终生成组未检测到相邻 DOF 跳变大于 π 的候选事件。
+Both modes use float64 mean-centered SVD without feature standardization or whitening. A selected set of components I reconstructs a feature sample as:
 
-## 2. 图组一：重建质量
+```text
+x_hat = mean + sum(score[k] * component[k] for k in I)
+```
 
-### G01–G02：解释方差与 K 扫描
+In mathematical notation, for feature vector $x_i$ and selected components I,
 
-![独立拟合解释方差](assets/plots/G01_variance.png)
+$$
+z_{ik}=u_k^{\top}(x_i-\mu),\qquad
+\hat{x}_i=\mu+\sum_{k\in I}z_{ik}u_k.
+$$
 
-![K 与自身重建误差](assets/plots/G02_k_error.png)
+Here $\mu$ is the mean feature vector, $u_k$ is a unit principal direction and $z_{ik}$ is its coefficient for sample i. The feature length is 28 in pose mode and 280 in window mode. This is a change of coordinates followed by an approximation; it does not assign a probability to the pose. The code expression above and this equation describe the same computation.
 
-K 扫描为 0、1、2、3、4、8、全部有效成分，按有效秩去重。窗口样本的解释方差在展平样本空间计算；DOF/FK 误差在窗口重叠平均后计算，二者不应直接视为同一指标。
+The mean is included once. K=0 selects no components; in window mode this reconstructs an average window, whose overlap-averaged sequence need not be a static pose. Window outputs are combined by equal-weight overlap averaging within their original clip.
 
-| 独立拟合组 | 有效秩 | K=3 累计方差 | K=3 DOF RMSE | K=3 FK RMSE | K=8 FK RMSE |
+The six root coordinates are excluded from PCA and copied through reconstruction. Frame count, FPS and loop mode are preserved. Spherical-joint DOFs are exponential-map coordinates, not independent Euler angles. The analysis does not unwrap rotation branches, clamp joint limits or amplify component coefficients. The final generated collection has no flagged adjacent DOF-coordinate jumps larger than π.
+
+### Two experiments with different purposes
+
+| Experiment | Basis fitting | Valid use |
+|---|---|---|
+| Independent fits | Fit reference and generated collections separately, for each PCA mode | Compression curves, explained variance, loadings and reconstruction against each clip's own input |
+| Shared reference basis | Fit only the reference; project reference, final samples and stage estimates with the same mean and components | Coordinates, trajectories, histograms and projected-density comparisons |
+
+Axes from independently fitted models are not interchangeable. All distribution comparisons below use the shared reference basis.
+
+Independent fits ask how compact each collection is in its own best linear coordinates. A shared basis asks where both collections lie on the same measuring axes: use the reference mean and directions in the projection formula above. Two similar-looking independently fitted scatter plots would not, by themselves, establish that the collections occupy the same coordinates.
+
+RMSE means root-mean-square error: squared discrepancies are averaged and then square-rooted, making larger errors matter more. DOF RMSE measures differences in native coordinates in radians. FK RMSE is the root-mean-square Euclidean distance between body origins in centimetres, using MimicKit CPU forward kinematics in float32, with equal weighting over frames and bodies. Each reconstructed clip is compared with its own input. There is no framewise reference-versus-generated ground-truth error: the two collections are not paired or phase-aligned.
+
+## 2. Compression and recovered motion detail
+
+The question here is how much motion detail is lost when only a few components are retained. Each collection is compared with itself before compression. This tests the PCA approximation, rather than whether a generated kick matches a particular recorded performance.
+
+### G01–G02: variance and reconstruction versus K
+
+Read the horizontal axis as the number K of retained directions. In G01, a larger cumulative variance fraction means that more of the dataset's squared variation is retained; it is not the percentage of physically correct motion. In G02, lower error means closer reconstruction of that collection's own coordinates or body positions.
+
+![G01: explained variance from independent fits](assets/plots/G01_variance.png)
+
+![G02: each collection's own-motion reconstruction error](assets/plots/G02_k_error.png)
+
+Some K axes use log or symlog spacing to accommodate the full rank. This changes axis spacing, not the values of K. The core quantities are cumulative explained variance and reconstruction error:
+
+$$
+\operatorname{EV}(K)=\frac{\sum_{k=1}^{K}\lambda_k}{\sum_{j=1}^{d}\lambda_j},\qquad
+\operatorname{RMSE}_{\mathrm{DOF}}=\sqrt{\frac{1}{TD}\sum_{i=1}^{T}\|\hat q_i-q_i\|_2^2}.
+$$
+
+The eigenvalue $\lambda_j$ is variance along principal direction j; d is the feature length, T the total number of frames, and $D=28$ the local DOF count. The vectors $q_i$ and $\hat q_i$ are input and reconstructed local DOFs in radians. For windows, EV is measured before overlap averaging, while RMSE is measured on restored frames.
+
+$$
+\operatorname{RMSE}_{\mathrm{FK}}=100\sqrt{\frac{1}{TB}\sum_{i=1}^{T}\sum_{b=1}^{B}\|\hat p_{ib}-p_{ib}\|_2^2}.
+$$
+
+The vectors $p_{ib}$ and $\hat p_{ib}$ are input and reconstructed FK body origins in metres, B is the number of bodies, and 100 converts the result to centimetres. Both inputs use the same root. FK makes the error spatially interpretable, but it still does not measure forces or balance.
+
+The K scan uses 0, 1, 2, 3, 4, 8 and all retained components, clipped to the numerical rank and deduplicated. Window explained variance is measured in flattened feature space; DOF and FK errors are measured after overlapping windows have been combined.
+
+| Independent fit | Rank | Variance at K=3 | DOF RMSE at K=3 | FK RMSE at K=3 | FK RMSE at K=8 |
 |---|---:|---:|---:|---:|---:|
 | reference / pose | 28 | 77.06% | 0.1804 rad | 12.50 cm | 2.84 cm |
 | generated / pose | 28 | 77.49% | 0.1766 rad | 12.94 cm | 2.80 cm |
 | reference / window | 29 | 80.24% | 0.1525 rad | 8.84 cm | 1.84 cm |
 | generated / window | 280 | 74.27% | 0.1887 rad | 12.20 cm | 3.14 cm |
 
-pose 曲线较接近，说明两组在当前 DOF 表示下的主要方差结构相近。生成窗口的低 K 压缩相对困难，但样本数、起始相位与覆盖方式均有差别，不能把更高的数值秩直接解释为更好的动作多样性。独立拟合的全部有效成分可把 DOF 重建到浮点精度，正式集合逐片段验收的最大绝对误差低于 4×10⁻¹⁵。
+The table's main practical message is that three components recover broad coordination but leave visible local differences, while eight reduce body-position errors considerably. Numerical rank is the number of non-negligible independent directions found in the centered samples. Centering 30 window samples allows at most 29 independent sample directions, which helps explain the reference-window rank.
 
-共享 reference/window 基底只有 29 个有效方向；generated/window 即使使用这 29 项仍有 **0.09654 rad / 5.23 cm** 的 DOF/FK 残差。生成窗口可以位于参考线性子空间之外，这不等于解码或重建公式出错。pose 参考基底已覆盖全部 28 维，因此其全成分投影没有这一维数限制。
+The pose curves suggest similar dominant variance structure in this coordinate representation. At low K, generated windows are harder to compress than reference windows. Sample count, phase coverage and overlapping-reference sampling all differ, so the rank difference alone cannot establish greater useful diversity.
 
-### G03–G04：哪些时间、关节丢失较多？
+Full-rank reconstruction with each collection's own model recovers the stored DOFs to floating-point precision; the largest checked absolute error is below 4 × 10⁻¹⁵. In contrast, projecting generated windows through all 29 reference-window components leaves **0.09654 rad DOF RMSE and 5.23 cm FK RMSE**. Unseen windows can lie outside that reference subspace. The reference pose basis spans all 28 pose coordinates, so its full-component projection has no analogous dimensional restriction.
 
-![代表关节的时间曲线](assets/plots/G03_joint_curves.png)
+### G03–G04: local detail that aggregate variance can hide
 
-![逐帧逐 DOF 误差热力图](assets/plots/G04_error_heatmaps.png)
+These panels locate the remaining errors. In G03, the horizontal axis is clip time and the vertical axis is one joint coordinate; compare each reconstruction with the full-motion line in the same panel. In G04, time runs horizontally, DOF index vertically, and color is $|\hat q_{ij}-q_{ij}|$ in radians. A brighter cell marks a larger approximation error at that frame and coordinate, not a higher probability or a stronger physical force.
 
-代表坐标为 DOF17（right_knee，铰链角）与 DOF8（right_shoulder.z，指数映射分量，参考中方差最大的 DOF）。G03 展示原始与各自 PCA 的 K=1/2/3，横轴是各片段自身时间；上下两组没有对齐动作相位。低 K 会遗漏膝盖的尖峰变化，即使总体解释方差较高，局部细节仍可能不同。G04 的四面板共用误差色标，横轴实际长度不同。
+![G03: representative DOF time series and cumulative reconstructions](assets/plots/G03_joint_curves.png)
 
-对应 GIF：以下每格均为独立、完整短片段；没有把生成片段延长成完整回旋踢。
+![G04: absolute DOF reconstruction errors with a common color scale](assets/plots/G04_error_heatmaps.png)
 
-| reference 完整 | reference K=1 | reference K=2 | reference K=3 |
+G03 follows DOF17 (`right_knee`, a hinge angle) and DOF8 (`right_shoulder.z`, the highest-variance reference coordinate, an exponential-map component). K=1/2/3 retain the mean and cumulative component contributions. Low-rank reconstructions miss the knee's sharp variation even when aggregate explained variance is substantial. Time is local to each clip; reference and generated phases are not aligned. G04 uses a common error scale across its four panels while preserving each clip's actual time range.
+
+The following GIFs use independent pose fits. Every cell is an individual clip, with no extension of a generated sample into a complete kick.
+
+| Reference, full | Reference, K=1 | Reference, K=2 | Reference, K=3 |
 |---|---|---|---|
-| ![reference](assets/gifs/reference_00_full.gif) | ![reference K1](assets/gifs/reference_00_K1.gif) | ![reference K2](assets/gifs/reference_00_K2.gif) | ![reference K3](assets/gifs/reference_00_K3.gif) |
+| ![Reference full](assets/gifs/reference_00_full.gif) | ![Reference K1](assets/gifs/reference_00_K1.gif) | ![Reference K2](assets/gifs/reference_00_K2.gif) | ![Reference K3](assets/gifs/reference_00_K3.gif) |
 
-| generated 样本0 完整 | generated 样本0 K=1 | generated 样本0 K=2 | generated 样本0 K=3 |
+| Generated clip 0, full | Generated clip 0, K=1 | Generated clip 0, K=2 | Generated clip 0, K=3 |
 |---|---|---|---|
-| ![generated](assets/gifs/generated_00_full.gif) | ![generated K1](assets/gifs/generated_00_K1.gif) | ![generated K2](assets/gifs/generated_00_K2.gif) | ![generated K3](assets/gifs/generated_00_K3.gif) |
+| ![Generated full](assets/gifs/generated_00_full.gif) | ![Generated K1](assets/gifs/generated_00_K1.gif) | ![Generated K2](assets/gifs/generated_00_K2.gif) | ![Generated K3](assets/gifs/generated_00_K3.gif) |
 
-## 3. 图组二：姿态结构与时间曲线
+## 3. Coordinates, loadings and temporal structure
 
-![前三个成分载荷](assets/plots/G05_loadings.png)
+This section asks what the reduced coordinates represent. **Loadings** describe a component's pattern across joints; **scores** describe how much that pattern contributes to a particular pose or window. A component can coordinate several joints at once and need not correspond to a named action such as kicking.
 
-G05 使用独立基底。pose 每行是一个主成分，每列为一个 DOF；window 每个面板分成三个 PC 区块，每块 28 列、10 行，保留全部时间载荷，未沿窗口平均。颜色是单位范数主成分的无量纲载荷。主成分的符号以最大绝对载荷为正固定，便于数值复现；组间仍不保证一一对应。
+For G05, compare the sign and magnitude of colors within a component: opposite signs mean coordinates contribute in opposite directions along that axis. Large loadings identify strong participation in that unit direction, not the amount of variance by themselves. For G06, follow connected points to see changes through time. G07 keeps time as an explicit axis instead of compressing it into a third PCA coordinate.
 
-![三维 PCA 轨迹](assets/plots/G06_pca_trajectories.png)
+![G05: first three component loadings](assets/plots/G05_loadings.png)
 
-G06 的三轴是**同一参考 pose 基底**的 PC1/PC2/PC3 系数（rad），每个点是姿态，连线表示片段内部的时间顺序，黑方块表示起点。生成样本0–3覆盖的是参考轨迹的不同局部区间，并非四条完整动作循环。三维图可以显示时间轨迹的形状，但没有概率轴。
+G05 shows independent bases. In the pose panels, rows are components and columns are DOFs. Each window panel contains three component blocks, each with 28 DOF columns and 10 time rows; temporal loadings are not averaged away. Colors are dimensionless loadings of unit-norm components. A component's largest absolute loading is assigned a positive sign for reproducibility; that convention does not align components between groups.
 
-![时间与两个关节坐标](assets/plots/G07_time_joint_curve.png)
+![G06: trajectories in three shared pose PCA coordinates](assets/plots/G06_pca_trajectories.png)
 
-G07 的 x 为时间（s），y/z 为 DOF17/DOF8（rad）。这是用户希望看到的“动作随时间变化”的三维曲线。它既不是密度曲面，也不是把姿态编号当作连续姿态轴；两组 y/z 范围一致，时间范围按实际片段长度保留。
+G06 uses PC1, PC2 and PC3 scores from the reference pose model, in radians. Points are poses, lines follow time within a clip, and black squares mark starts. Generated clips 0–3 occupy different local portions of the reference trajectory; they are not complete cycles. The third axis is another coordinate, not probability.
 
-## 4. 图组三：经验分布与低维密度
+![G07: time and two native DOF coordinates](assets/plots/G07_time_joint_curve.png)
 
-![pose 共享散点和直方图](assets/plots/G08_pose_scatter_histograms.png)
+G07 instead uses time in seconds on x, DOF17 on y and DOF8 on z, in radians. It answers a temporal question without introducing an unsupported probability axis. The two panels share DOF ranges but retain their different durations.
 
-![window 共享散点和直方图](assets/plots/G08_window_scatter_histograms.png)
+## 4. From projected samples to density surfaces
 
-G08 的横纵轴是共享 PC 系数，不是方差。pose 点代表帧，window 点代表窗口；两种实验的轴不可混用。直方图使用相同 bin 边界并按面积归一化，避免 5120 对 39 的样本量直接影响柱高。参考动作按时间均匀采样得到的是经验姿态占用分布；generated 的帧在片段内相关，5120 帧不等于 5120 个独立动作。
+The question changes from reconstructing a particular clip to describing where many poses or windows occur. Start with the actual points in G08, then inspect the smooth summaries in G09. A similar projected pattern is evidence about these coordinates only; different high-dimensional motions can overlap after projection.
 
-### G09：三维概率密度曲面和配套等高线
+![G08: shared pose scatter and normalized histograms](assets/plots/G08_pose_scatter_histograms.png)
 
-![pose 高斯密度](assets/plots/G09_pose_gaussian_density.png)
+![G08: shared window scatter and normalized histograms](assets/plots/G08_window_scatter_histograms.png)
 
-![pose KDE 密度](assets/plots/G09_pose_kde_density.png)
+G08 compares shared PC scores, not variances. A pose point represents a frame; a window point represents a ten-frame segment. The pose and window models define different coordinate spaces. Histogram bins are shared across groups and normalized by area, so raw sample counts do not set histogram height. Uniformly sampled reference frames describe empirical pose occupancy over time. Generated frames within a clip are correlated: 5120 frames are not 5120 independent motions.
 
-![window 高斯密度](assets/plots/G09_window_gaussian_density.png)
+![G09: pose Gaussian density surface and contours](assets/plots/G09_pose_gaussian_density.png)
 
-![window KDE 密度](assets/plots/G09_window_kde_density.png)
+![G09: pose KDE surface and contours](assets/plots/G09_pose_kde_density.png)
 
-这里的三维安排为 **x=PC1 系数、y=PC2 系数、z=该二维投影的概率密度**（1/rad²）。单个点的概率不是曲面的高度；一个区域的概率要对该区域积分。原始数据也可以做密度估计，不需要先经过 SMP。
+![G09: window Gaussian density surface and contours](assets/plots/G09_window_gaussian_density.png)
 
-高斯面用各组二维均值与最大似然协方差拟合，适合观察整体中心与宽度，但会填平环形或多峰结构。KDE 为等权高斯核混合；核协方差只由 reference 的 Scott 带宽确定，再**原封不动用于生成组和所有 stage**。pose 核协方差对角约为 (0.52821, 0.26933) rad²；window 约为 (6.10368, 3.21882) rad²。高斯模型的协方差是拟合参数，不是 KDE 平滑参数。
+![G09: window KDE surface and contours](assets/plots/G09_window_kde_density.png)
 
-同一图内原始与生成共用 x/y 网格、z 范围和色标；密度按整平面积分为1定义，不对显示范围重新缩放。曲面只显示有限网格，画面内积分可以小于1。实现已与 SciPy 的 reference KDE 核对，并验证大范围数值积分。G08 散点上的参考轨迹比 G09 的宽曲面更细：这正说明带宽影响观感，KDE 平滑填出的区域不能被当作真实采样或生成能力证据。
+For G09, **x and y are PC1 and PC2 scores; z is the probability density of that two-dimensional projection**, in 1/rad². A height is not the probability of an individual pose. Region probabilities require integration. Both the reference observations and generated samples support density estimation.
 
-最终样本0–3的局部播放与 G06/G08/G09 对照：
+KDE (kernel density estimation) places a small smooth bump at each projected point and averages the bumps:
 
-| 样本0 | 样本1 | 样本2 | 样本3 |
+$$
+\hat p(z)=\frac{1}{N}\sum_{i=1}^{N}\mathcal N(z;z_i,\Sigma_h),\qquad
+\Pr(z\in A)\approx\int_A\hat p(z)\,dz.
+$$
+
+Here $z=(z_1,z_2)$ is a location in the shared PCA plane, $z_i$ one observed projected point, N the number of points, and $\Sigma_h$ the common kernel covariance. The symbol $\mathcal N(z;z_i,\Sigma_h)$ denotes a normalized Gaussian bump centered at $z_i$. A is a region of the plane. The matrix $\Sigma_h$ controls smoothing; it is separate from window length H. Wide kernels merge nearby structure; narrow kernels emphasize individual observations. The factor 1/N makes the total mass one regardless of how many samples a group contains.
+
+Read the G09 surface height and its contour color as the same density quantity. The Gaussian panels summarize one overall center and spread; KDE can retain several concentrations. Their agreement or disagreement describes the chosen estimates, not which generator is intrinsically better.
+
+The Gaussian model uses each group's fitted mean and maximum-likelihood covariance. It summarizes location and spread while smoothing over rings or multiple modes. KDE is an equal-weight mixture of Gaussian kernels. Its covariance is set once using Scott's rule on the reference and reused unchanged for the generated collection and all stages. Approximate diagonal entries are (0.52821, 0.26933) rad² for pose and (6.10368, 3.21882) rad² for window. The fitted Gaussian's covariance is a model parameter, not this KDE bandwidth.
+
+Within each comparison, grids, surface heights and color scales are shared. Densities integrate to one over the full plane; they are not renormalized to the displayed rectangle. The implementation was checked against SciPy's reference KDE and by numerical integration over a large domain. The much thinner scatter trajectory in G08 is a reminder that a KDE's filled regions can come from smoothing, rather than observed or successfully generated motion.
+
+These four full clips connect the projected trajectories and densities to visible motion:
+
+| Clip 0 | Clip 1 | Clip 2 | Clip 3 |
 |---|---|---|---|
-| ![sample0](assets/gifs/generated_00_full.gif) | ![sample1](assets/gifs/generated_01_full.gif) | ![sample2](assets/gifs/generated_02_full.gif) | ![sample3](assets/gifs/generated_03_full.gif) |
+| ![Clip 0](assets/gifs/generated_00_full.gif) | ![Clip 1](assets/gifs/generated_01_full.gif) | ![Clip 2](assets/gifs/generated_02_full.gif) | ![Clip 3](assets/gifs/generated_03_full.gif) |
 
-## 5. 图组四：Diffusion 去噪阶段
+## 5. Denoising snapshots: clean estimates, not raw noise
 
-记录的实际 timestep 为 49、39、29、19、9、0。**t=49 是第一次反向去噪的输入时刻，不是第49次迭代。** 每个时刻同时保存 normalized 输入 x_t 和预测 clean x₀；后者反归一化后解码。下面绘图、GIF使用的是 clean 估计，不能把这些图称为原始 x_t 噪声分布。六组保持同一批 sample ID，t=0 的估计与最终输出逐位一致。
+This section follows one sampling procedure rather than comparing differently trained models. All stages use the same frozen network. Physical time runs across the frames within each GIF; diffusion timestep indexes the repeated refinement of that whole clip. A change from t=49 to t=0 is therefore not the character's next movement in time.
 
-![pose 各阶段共享密度](assets/plots/G10_pose_stages.png)
+The recorded timesteps are 49, 39, 29, 19, 9 and 0. **Timestep 49 is the first reverse-denoising input, not the forty-ninth reverse iteration.** At each selected step, the cache retains both normalized input x_t and predicted clean x₀. Figures and replay clips use the latter after denormalization and motion decoding. They do not depict the raw x_t distribution. Sample IDs remain aligned across stages; the timestep-0 clean estimate is bitwise identical to the final output.
 
-![pose 各阶段共享散点](assets/plots/G11_pose_stage_scatter.png)
+![G10: pose clean-estimate densities across stages](assets/plots/G10_pose_stages.png)
 
-![window 各阶段共享密度](assets/plots/G10_window_stages.png)
+![G11: all pose clean-estimate projections across stages](assets/plots/G11_pose_stage_scatter.png)
 
-![window 各阶段共享散点](assets/plots/G11_window_stage_scatter.png)
+![G10: window clean-estimate densities across stages](assets/plots/G10_window_stages.png)
 
-G10 的白圈为参考样本，红色为 sample0；window 每个片段只有一个窗口，因此红色只出现一个点。G11 保留所有样本，蓝色为参考、橙色为生成阶段估计。各阶段共用参考基底、坐标范围、KDE 核与密度色标。t=49 的姿态估计分散且可能不自然，后续逐渐靠近参考动作区域；密度变尖本身并不是质量评分。阶段的演化也不是角色沿物理时间从 t=49 播到 t=0。
+![G11: all window clean-estimate projections across stages](assets/plots/G11_window_stage_scatter.png)
 
-相同 sample0 在六个阶段的独立 0.3 s 姿态片段：
+For the checkpoint's noise-prediction setting, the denoising relation is:
+
+$$
+\begin{aligned}
+ x_t &= \sqrt{\bar\alpha_t}x_0+\sqrt{1-\bar\alpha_t}\,\epsilon,\quad \epsilon\sim\mathcal N(0,I),\\
+ \hat x_0^{(t)} &= \frac{x_t-\sqrt{1-\bar\alpha_t}\,\epsilon_\theta(x_t,t)}{\sqrt{\bar\alpha_t}}.
+\end{aligned}
+$$
+
+In this subsection, x denotes a normalized generated-feature window, not the earlier native-DOF PCA vector. $x_0$ is a clean feature window, $x_t$ its noisy state, $\epsilon$ standard Gaussian noise with identity covariance I, $\bar\alpha_t$ the scheduler's retained-signal fraction, and $\epsilon_\theta$ the neural network's noise prediction with fixed parameters $\theta$. During generation the true clean window is unknown; $\hat x_0^{(t)}$ is the current estimate. The first relation describes noise corruption; the second explains the clean estimate stored by the scheduler. A full DDPM update also constructs the next noisy state. These equations provide background for the existing sampler, not an additional computation in this report. See [DDPM's training and sampling formulation](https://arxiv.org/html/2006.11239v2).
+
+When the retained signal is small, errors in the predicted noise can produce large errors in the clean estimate. This helps explain the erratic t=49 GIF: early rotation features may be far from a consistent pose, direct decoding adds no smoothing or contact repair, and looping a very short clip makes jumps conspicuous. It is an early estimate to inspect, not a usable completed motion or a sign that training is still running.
+
+Read G10 from earlier to later estimates using the shared scale, and use the G11 point clouds to check that smoothing does not hide outliers. The observed change is a transition toward the reference motion region, not a numerical evaluation of a policy or an exact likelihood.
+
+G10 overlays reference observations as white circles and clip 0 in red. In window mode, clip 0 contributes a single point. G11 retains every projected sample, with reference points in blue and stage estimates in orange. Each stage comparison uses the same reference basis, axis limits, KDE kernel and density scale.
+
+The initial clean estimates are dispersed and can decode into implausible poses. Later estimates move toward the observed motion region. A sharper density is not itself a quality metric, and diffusion timestep is not the physical time axis of a character's movement. Each GIF below replays a separate 0.3 s estimate of the same clip 0:
 
 | t=49 | t=39 | t=29 |
 |---|---|---|
@@ -133,56 +277,62 @@ G10 的白圈为参考样本，红色为 sample0；window 每个片段只有一�
 |---|---|---|
 | ![t19](assets/gifs/stage_t19_sample00.gif) | ![t9](assets/gifs/stage_t09_sample00.gif) | ![t0](assets/gifs/stage_t00_sample00.gif) |
 
-## 6. 解码含义、显示与局限
+## 6. Decoding, display and evidential limits
 
-prior 每帧114维：root位置3、root六维旋转6、14个关节六维旋转84、5个关键身体的 root 相对位置15、root线速度/角速度6。原生 motion 每帧34维：root位置3、root指数映射3、局部 DOF28。解码复用既有 `tan_norm_to_quat` 与 `rot_to_dof`，没有另加 Gram–Schmidt、限位或接触修正。时间轴沿训练数据的过去到当前顺序。
+This section explains what the numbers and GIFs actually preserve. Decoding changes the representation of a generated clip; PCA reconstruction changes how much of that clip's variation is retained. They are different operations. The redundant key-position/velocity features let us check internal agreement, not measure distance from an unavailable ground-truth generated motion.
 
-原始生成特征完整保留。关键点和速度等冗余量并非 motion `.pkl` 的独立字段，不能声称114维到34维是可逆无损转换。本次最终样本的 raw 关键点与解码后 FK 关键点 RMSE 约 **3.29 cm**；root位置前向差分与相邻预测速度中点值的坐标 RMSE 约 **0.129 m/s**，后者还含离散差分误差。完整诊断在 [decode_diagnostics.json](assets/data/decode_diagnostics.json)。
+In geometric terms, $p_b=\operatorname{FK}_b(\rho,q)$: root pose $\rho$ and local DOFs q determine body b's position using the skeleton. Playback sets these poses for drawing. It does not ask a controller to create them by applying forces. Fixing the displayed root is like holding the character's base at a stand: it isolates posture while suppressing whole-body travel and turning.
 
-GIF 通过 Newton 实际渲染，隐藏 UI，只显示一个角色；固定 root 水平位置、朝向与统一参考高度，局部关节旋转保留。17段共用同一镜头与裁剪框，输出520×520，无随帧跟随的裁剪；所有帧已检查角色完整与边界。采样时刻为严格30 FPS；GIF格式仅支持10 ms时间量化，采用30/40 ms交替。39帧的时间戳跨度是1.26667 s，含最后一帧保持后的循环周期为1.30 s；10帧对应0.30 s跨度、0.33 s编码周期。短片段回到开头的跳变是重播，不是生成连续过渡。
+Before decoding, denormalization restores the training feature means and scales so that values return to their coordinate units. This diffusion preprocessing is separate from the choice not to standardize native DOFs for PCA.
 
-固定 root 后，原动作的整体转身、跳起和位移不会显示，脚滑、悬空或穿插不代表这里进行了物理接触处理。交互播放器仍可即时切回 `comparison` 查看原生 root，或使用 `classroom` 查看完整局部动作与 K=1/2/3。
+A rotation can have different numerical encodings. The three exponential-map coordinates together encode an axis and angle; the six-dimensional encoding uses two direction vectors that ideally have unit length and are perpendicular. Generated vectors, especially early estimates, may violate those conditions. Gram–Schmidt would orthogonalize such vectors, but this case preserves the repository decoder instead of adding that repair. A change of encoding alone does not establish a physically valid motion.
 
-本案例只有一段回旋踢和512个短生成片段，没有独立测试动作、置信区间或物理控制评估。二维/三维投影与低维密度不能代表完整高维分布；在新区域出现样本也不能证明生成质量更好。reference 窗口之间高度重叠，生成片段的起始相位与原始规则切窗也不完全等价。后续可以先增加多个 seed、片段级重采样置信区间及多动作对照，再接入策略实际轨迹。
+Each generated frame contains 114 features: root position (3), root rotation in 6D (6), fourteen joint rotations in 6D (84), five root-relative key-body positions (15), and root linear/angular velocities (6). A native motion frame stores 34 coordinates: root position (3), root exponential map (3), and local DOFs (28). Decoding reuses `tan_norm_to_quat` and `rot_to_dof`, preserves the training sequence's past-to-present ordering, and adds no Gram–Schmidt projection, limit correction or contact repair.
 
-## 7. 程序组织与验收
+The complete raw features remain available. Key positions and velocities are not independent fields in the native motion file, so 114-to-34 decoding is not an invertible, lossless conversion. For final samples, raw key positions differ from decoded FK key positions by about **3.29 cm RMSE**. Forward root-position differences versus adjacent predicted-velocity midpoints give about **0.129 m/s coordinate RMSE**, which also includes finite-difference approximation error. See [decode diagnostics](assets/data/decode_diagnostics.json).
+
+All 17 GIFs are rendered through Newton with UI hidden and one visible actor. They share a camera, fixed crop, root heading, horizontal position and reference height, with local rotations retained. Output size is 520 × 520. Frame sampling is exactly 30 FPS; GIF timing is quantized to 10 ms using 30/40 ms holds. The 39-frame reference spans 1.26667 s in timestamps and loops over 1.30 s including its final hold; a ten-frame clip spans 0.30 s and has a 0.33 s encoded loop. Restart discontinuities are replay boundaries, not generated transitions.
+
+Fixing the root removes global turning, displacement and vertical motion from the display. Sliding feet, floating or intersections should not be interpreted as contact-corrected physics. The interactive `comparison` view restores native root motion; `classroom` displays the full local motion above cumulative K=1/2/3 reconstructions.
+
+Only one reference recording is available here. There is no held-out motion set, confidence interval or physical-control evaluation. Overlapping reference windows and sampled starting phases also differ. Low-dimensional surfaces cannot characterize the complete high-dimensional distribution, and samples in previously empty projected regions do not establish better generation. Multiple seeds, clip-level resampling intervals and additional reference motions are useful next comparisons before policy trajectories are introduced.
+
+## 7. Implementation and recorded validation
+
+The final section records how the result can be located and checked. A saved PCA model contains its mean and component directions; a collection snapshot also preserves source frames, scores and window boundaries. A cache reuses those verified files instead of repeating a computation. Hashes identify file contents so that a changed input or model is not silently treated as the same experiment.
+
+The flow below is an implementation map, not a learning algorithm or an extra scientific result. Readers interested only in the motion findings can return to the figures; readers reproducing them can use it with the playback document.
 
 ```text
-采样与解码（不建场景）
-run_smp.py → smp/sampling.sample_prior()
-  → TinyMDM / EMA / 原 DDPM scheduler
-  → 可选 trace_callback(t, x_t, predicted_x0)
-  → 反归一化 → 既有旋转解码 → samples.npz + manifest
+run_smp.py -> smp/sampling.py
+  TinyMDM + EMA + existing DDPM -> optional stage callback
+  -> denormalize -> existing rotation decoder -> sampled features and native frames
 
-集合分析（离线）
-prepare_case.py → workflows/spinkick.py → data/resampling.resample_motion(reference, 30 FPS)
-  → core/collection.fit_collection(reference/generated, pose/window)
-  → core/collection.project_collection(all groups, reference model)
-  → save_collection() → analysis.json + 去重模型/帧/系数快照
+prepare_case.py -> workflows/spinkick.py
+  data/resampling.py -> core/collection.py independent fits and shared projections
+  -> analysis.json + deduplicated model, frame and projection snapshots
 
-仅播放（不采样、不拟合）
-play_analysis.py → core/collection.load_collection() → for_clip(index)
-  → AnalysisSession.reconstruct(indices)
-  → player/environment.py 中的 InMemoryMotionLib / PcaPlaybackEnv
-  → 动画插值 → 可选固定 root → MimicKit FK → Newton/Warp 渲染
+play_analysis.py -> core/collection.load_collection() -> for_clip()
+  -> AnalysisSession.reconstruct(indices) -> player/environment.py
+  -> animation interpolation -> display-only root transform -> MimicKit FK -> Newton/Warp
 
-报告输出（读取已保存结果）
-reporting/metrics.py / reporting/density.py → 数值与密度
-case_plots.py → reporting/plots.py → Matplotlib PNG / 数值网格
-case_gifs.py → reporting/gifs.py → 同一 Newton 场景逐时刻渲染 → 固定裁剪 GIF
+case_plots.py -> reporting/metrics.py, density.py and plots.py
+case_gifs.py  -> reporting/gifs.py -> fixed-camera frame rendering and cropping
 ```
 
-PCA公式、窗口还原与成分选择位于 `core/`。原生数据与原子写入位于 `data/`，公共路径位于 `paths.py`；SMP不依赖PCA session进行持久化。`player/`、`smp/`、`reporting/`分开管理，`workflows/`仅负责案例编排，顶层脚本保留现有命令。采样缓存包含权重/配置/env/character内容哈希、种子、batch、EMA、设备及处理版本。完整缓存复用不推理、不执行SVD；损坏结果可由准备入口重建。播放入口仅校验、载入快照，缺少结果时报错，不自动重新拟合。Git仅保留本案例两份Markdown文档，`assets/`保留在本地。
+PCA math, selection and overlap averaging belong to `core/`; native data and atomic persistence belong to `data/`. Shared paths live in `paths.py`. Sampling does not depend on a PCA session to write artifacts. The top-level commands remain stable while `smp/`, `player/`, `reporting/` and `workflows/` have separate responsibilities.
 
-验收使用 `mimickit-newton`：67项 motion/PCA/CLI 回归与9项 SMP采样/案例缓存测试通过（普通测试跳过2项 opt-in GL）；另分三个真实 Newton 进程验证 reference/pose、generated/window、stage_49/pose，覆盖视图切换、暂停、成分更新、单步、重启与关闭。带阶段回调的采样与正常EMA采样输出、随机状态一致。正式512集合验证有限值、形状、片段边界、全成分重建与缓存命中；17图逐图检查，17 GIF逐帧校验时间、帧数和裁剪，抽查仅播放命令未导入采样模块或执行SVD。
+Sampling cache identity includes model/configuration/environment/character hashes, seed, batch size, EMA, device and processing version. Valid preparation caches avoid both inference and SVD. Playback reads verified snapshots and never repairs a missing fit by silently recomputing it. Generated assets stay local and are Git-ignored; the English source reports and Chinese translations are versioned.
 
-## 8. 论文图示对应
+The recorded implementation validation used `mimickit-newton`: 67 motion/PCA/CLI tests and 9 sampling/case-cache tests passed, with two opt-in GL tests skipped in those ordinary runs. Separate native-window runs covered reference/pose, generated/window and stage_49/pose, including view changes, pause, selection updates, stepping, restart and shutdown. Callback tracing preserved ordinary EMA output and RNG state. The 512-sample artifacts passed finite-value, shape, boundary, full-component reconstruction and cache checks. All 17 plots and 17 GIFs were reviewed; 29 playback examples were checked for loading without sampling or SVD. These are recorded implementation checks, not newly measured scientific performance results; see [validation.json](assets/data/validation.json).
 
-| 资料 | 核对的图示/用途 | 本案例取舍 |
-|---|---|---|
-| [Safonova、Hodgins、Pollard，SIGGRAPH 2004](https://graphics.cs.cmu.edu/nsp/papers/sig04.pdf) | 低维动作表示与随维数变化的重建误差 | G01/G02学习压缩效果；没有复现论文的动力学优化 |
-| [Wang、Fleet、Hertzmann，TPAMI 2008](https://www.dgp.toronto.edu/~jmwang/gpdm/pami.pdf) | Fig.3(a)为行走数据的三维PCA初始化轨迹，后续图是GPLVM/GPDM潜空间 | G06采用纯PCA三维轨迹；没有把GPDM置信度当作本案例概率密度 |
-| [Urtasun等，CGF 2004](https://www.cs.toronto.edu/~urtasun/publications/urtasun-etal-cgf04.pdf) | Fig.4绘制速度与前两个成分系数；其动作向量含时间离散后的整段关节角 | 当前短窗口并非其整周期风格模型，暂不添加速度控制曲线 |
-| [SMP论文](https://arxiv.org/abs/2512.03028) | 冻结motion diffusion prior用于下游策略的score/SDS奖励 | 本轮只观察prior生成与去噪，不等同论文中的策略执行结果 |
+### Related visualization choices
 
-G09 的高斯/KDE曲面是本案例为理解数据分布增加的低维统计视图，不声称是上述论文图的逐项复现。
+These references explain why the report uses compression curves and low-dimensional motion trajectories. GPLVM and GPDM, mentioned below, are nonlinear latent-variable models from the related literature; they are not additional models fitted in this experiment. Understanding their algorithms is not required to read the present PCA results.
+
+- [Safonova, Hodgins and Pollard, SIGGRAPH 2004](https://graphics.cs.cmu.edu/nsp/papers/sig04.pdf): low-dimensional motion representation and error versus dimension motivate G01–G02. This case does not implement the paper's physical optimization.
+- [Wang, Fleet and Hertzmann, TPAMI 2008](https://www.dgp.toronto.edu/~jmwang/gpdm/pami.pdf): Fig. 3(a) shows a 3D PCA initialization of walking trajectories. G06 uses linear PCA only; GPDM confidence visualizations are not treated as this case's density estimates.
+- [Urtasun et al., CGF 2004](https://www.cs.toronto.edu/~urtasun/publications/urtasun-etal-cgf04.pdf): Fig. 4 relates speed to component coefficients for temporally discretized motion vectors. The present short-window representation is not that full-cycle style model.
+- [SMP](https://arxiv.org/abs/2512.03028): a frozen motion diffusion prior supplies score/SDS guidance for downstream control. Direct prior replay in this report is distinct from the policy execution studied there.
+
+The Gaussian and KDE surfaces in G09 are additional explanatory views for this case, not replicas of those papers' experiments.

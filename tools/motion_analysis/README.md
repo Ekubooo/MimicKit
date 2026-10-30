@@ -60,8 +60,10 @@ PCA 与播放器通过 `AnalysisSession` 连接：播放器调用 `session.recon
 调整成分不重新拟合。
 
 输入来自 `data/motions/`。单文件结果继续保存到本目录 `PCA_Result/`；回旋踢案例结果
-保存到根目录 `report/humanoid_spinkick/assets/`。Git 仅保留该案例的 `analysis.md` 和
-`reproduce.md`，生成资产仍保留在本机。现有六个脚本入口、CLI 参数和缓存格式保持兼容。
+保存到根目录 `report/humanoid_spinkick/assets/`。报告以 `analysis.md`、`reproduce.md` 为英文原版，
+另附 `analysis.zh-CN.md`、`reproduce.zh-CN.md` 中文译版；先编写英文，再同步中文，
+后续案例遵循 [report/AGENTS.md](../../report/AGENTS.md)。Git 保留四份文档，生成资产仍保留在本机。
+现有六个脚本入口、CLI 参数和缓存格式保持兼容。
 内部 Python 导入已统一到上述子包路径，不保留旧平铺模块的别名；仓库内调用与测试已同步更新。
 Newton 的公共 UI/暂停接口仍位于 `mimickit/engines/newton_engine.py`。
 
@@ -147,8 +149,9 @@ python tools/motion_analysis/play_analysis.py --manifest report/humanoid_spinkic
 
 此入口没有 `--play`、`--force`、`--window` 或采样参数；缺少快照时明确报错。
 完整案例参数、图/GIF 对应与仅播放命令见
-[回旋踢复现文档](../../report/humanoid_spinkick/reproduce.md)。生成资产已忽略，只有两份 Markdown
-文档会随 Git 分发；另一台机器需要先生成或取得对应 `assets/data/` 才能使用这些播放命令。
+[回旋踢英文复现文档](../../report/humanoid_spinkick/reproduce.md)及其
+[中文译版](../../report/humanoid_spinkick/reproduce.zh-CN.md)。生成资产已忽略，英文原版与中文译版
+会随 Git 分发；另一台机器需要先生成或取得对应 `assets/data/` 才能使用这些播放命令。
 
 ### 常用参数组合
 

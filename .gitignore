@@ -9,8 +9,11 @@ wandb/
 tmp/
 tools/motion_analysis/PCA_Result/
 
-# Keep only the two source documents; generated report assets stay local.
+# English source reports and Chinese translations; generated assets stay local.
 /report/**
-!/report/humanoid_spinkick/
-!/report/humanoid_spinkick/analysis.md
-!/report/humanoid_spinkick/reproduce.md
+!/report/AGENTS.md
+!/report/*/
+!/report/*/analysis.md
+!/report/*/reproduce.md
+!/report/*/analysis.zh-CN.md
+!/report/*/reproduce.zh-CN.md
