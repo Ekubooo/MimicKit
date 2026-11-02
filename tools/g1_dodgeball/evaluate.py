@@ -41,6 +41,9 @@ def run(args, out):
     if env_cfg != read_yaml(ENV) or engine_cfg != read_yaml(ENGINE):
         raise ValueError("Saved policy environment/engine differs from this preset; inspect before evaluating.")
     env_cfg["rand_reset"] = args.init != "starts"
+    if args.projectiles == "off":
+        # Preserve policy input dimensions and physical objects; suppress launches only.
+        env_cfg.update(proj_trigger_time_min=1e9, proj_trigger_time_max=1e9)
     agent_cfg.update(enable_gsi=args.init == "gsi",
                      smp_prior_cfg=str(Path(args.prior_dir) / "diffusion_config.yaml"),
                      smp_prior_model=str(Path(args.prior_dir) / "model.pt"))
@@ -59,6 +62,10 @@ def run(args, out):
         agent.eval()
         agent.set_mode(AgentMode.TEST)
         obs, info = env.reset()
+        diagnostics = None
+        if args.joint_diagnostics:
+            from tools.g1_dodgeball.joint_diagnostics import JointDiagnostics
+            diagnostics = JointDiagnostics(env)
         n, char, dt = args.episodes, env._get_char_id(), env._engine.get_timestep()
         seen = torch.zeros(n, dtype=torch.bool, device=args.device)
         returns = torch.zeros(n, device=args.device)
@@ -88,6 +95,11 @@ def run(args, out):
                 windows.append(info["disc_obs"][ids].cpu().clone())
                 slots.append(ids.cpu())
             terminal = done != DoneFlags.NULL.value
+            if diagnostics is not None:
+                # Capture terminal contact impulses even between the regular 10-Hz samples.
+                trace_active = active if step % 3 == 0 else active & terminal
+                if bool(trace_active.any()):
+                    diagnostics.record(env, trace_active, action, launches)
             for i in (terminal & active).nonzero(as_tuple=False).flatten().tolist():
                 rows.append({"env_id": i, "episode_seconds": float(env.get_env_time()[i]),
                              "done": DoneFlags(int(done[i])).name, "task_return": float(returns[i]),
@@ -117,7 +129,8 @@ def run(args, out):
             writer.writerows(rows)
         result = provenance({"policy": args.model_file, "policy_sha256": sha256(args.model_file),
             "prior_model_sha256": sha256(Path(args.prior_dir) / "model.pt"),
-            "seed": args.seed, "initialization": args.init, "episodes": n, "parallel_envs": n,
+            "seed": args.seed, "initialization": args.init, "projectiles": args.projectiles,
+            "episodes": n, "parallel_envs": n,
             "mean_episode_seconds": sum(r["episode_seconds"] for r in rows) / n,
             "timeout_rate": sum(r["done"] == "TIME" for r in rows) / n,
             "failures": sum(r["done"] == "FAIL" for r in rows),
@@ -136,6 +149,15 @@ def run(args, out):
                       "Hit and ground-contact categories may overlap; launches are not confirmed encounters.",
                       "Task return is the unweighted environment reward sum, not combined PPO reward.",
                       "SMP diagnostics sample windows at 10 Hz with the saved frozen SDS normalizer."]})
+        if diagnostics is not None:
+            result["joint_geometry_diagnostics"] = diagnostics.save(out)
+            diagnostic_file = out / "diagnostics.txt"
+            keys = ("policy", "policy_sha256", "seed", "initialization", "projectiles", "episodes",
+                    "mean_episode_seconds", "timeout_rate", "failures", "episodes_with_hit_detector",
+                    "episodes_with_nonfoot_ground_contact", "mean_smp_reward", "raw_sds_mean")
+            diagnostic_file.write_text(json.dumps({key: result[key] for key in keys}, indent=2) + "\n\n" +
+                                       diagnostic_file.read_text(encoding="utf-8"), encoding="utf-8")
+            result["notes"].append("Read diagnostics.txt for per-joint limits/targets/velocities. Geometry flags are not fall ground truth.")
         write_json(out / "evaluation.json", result)
         (out / "summary.txt").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print("Completed. Send: " + str(out / "summary.txt"), flush=True)
@@ -150,6 +172,8 @@ def main():
     parser.add_argument("--prior_dir")
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--init", choices=("gsi", "reference", "starts"), default="gsi")
+    parser.add_argument("--projectiles", choices=("on", "off"), default="on")
+    parser.add_argument("--joint_diagnostics", action="store_true")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=123)
     args = parser.parse_args()

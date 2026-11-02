@@ -18,6 +18,25 @@ from tools.g1_dodgeball.workflow import (ENV, PRIOR_ENV, AGENT, ENGINE, PRIOR_CF
 
 
 class G1DodgeballContracts(unittest.TestCase):
+    def test_joint_diagnostic_distinguishes_limit_pressure_from_motion(self):
+        from tools.g1_dodgeball.joint_diagnostics import joint_statistics, temporal_target_rate
+        # First joint is still at a bound while commanded farther; second actually follows a motion.
+        q = torch.tensor([[0.0, 0.2], [0.0, 0.6]])
+        target = torch.tensor([[-0.8, 0.2], [-0.8, 0.6]])
+        velocity = torch.tensor([[0.0, 1.0], [0.0, 1.0]])
+        stats = joint_statistics(q, velocity, target, torch.tensor([0.0, 0.0]), torch.ones(2))
+        self.assertEqual(stats["near_physical_limit_fraction"][0], 1)
+        self.assertEqual(stats["command_outside_physical_limits_fraction"][0], 1)
+        self.assertEqual(stats["mean_abs_velocity"][0], 0)
+        self.assertAlmostEqual(float(stats["mean_abs_tracking_error"][0]), 0.8)
+        self.assertEqual(stats["command_outside_physical_limits_fraction"][1], 0)
+        self.assertEqual(stats["mean_abs_tracking_error"][1], 0)
+        # Two slots hold different poses: pooled variance is nonzero, temporal movement is zero.
+        state = torch.tensor([[0., .1], [1., .1], [0., .2], [1., .2]])
+        target = torch.tensor([[0.], [2.], [0.], [2.]])
+        torch.testing.assert_close(temporal_target_rate(state, target), torch.zeros(1))
+        self.assertIsNone(temporal_target_rate(state[:2], target[:2]))
+
     def test_zero_exit_with_nonfinite_or_constraint_overflow_is_rejected(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "output") as folder:
             p = Path(folder)
@@ -140,6 +159,16 @@ class G1DodgeballNewtonContracts(unittest.TestCase):
                         env._engine.get_root_rot(char), env._kin_char_model.dof_to_rot(env._engine.get_dof_pos(char)))
                     torch.testing.assert_close(env._engine.get_body_pos(char), pos, atol=2e-4, rtol=1e-4)
                     self.assertTrue(bool(torch.isfinite(env._disc_obs_buf).all()))
+                from tools.g1_dodgeball.joint_diagnostics import JointDiagnostics
+                before = env._engine.get_dof_pos(char).clone()
+                diagnostic = JointDiagnostics(env)
+                diagnostic.record(env, torch.tensor([True, False, True, False], device="cuda:0"),
+                                  before, torch.zeros(4, device="cuda:0"))
+                torch.testing.assert_close(env._engine.get_dof_pos(char), before, rtol=0, atol=0)
+                with tempfile.TemporaryDirectory(dir=ROOT / "output") as folder:
+                    summary = diagnostic.save(folder)
+                    self.assertEqual(summary["all"]["sample_count"], 2)
+                    self.assertEqual(len(Path(folder, "joint_trace.csv").read_text().splitlines()), 1+2*29)
             finally:
                 env.close()
 
