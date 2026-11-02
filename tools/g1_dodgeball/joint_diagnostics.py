@@ -5,14 +5,17 @@ from pathlib import Path
 import torch
 
 
-def joint_statistics(q, velocity, target, lower, upper):
+def joint_statistics(q, velocity, target, lower, upper, requested=None):
     """Rows are active first-episode samples, columns follow the model's DoF order."""
     outside = (target < lower - 1e-4) | (target > upper + 1e-4)
     near = (q < lower + 0.03) | (q > upper - 0.03)
+    requested = target if requested is None else requested
+    requested_outside = (requested < lower - 1e-4) | (requested > upper + 1e-4)
     return {"q_min": q.amin(0), "q_max": q.amax(0), "q_std": q.std(0, unbiased=False),
             "target_std": target.std(0, unbiased=False), "mean_abs_velocity": velocity.abs().mean(0),
             "mean_abs_tracking_error": (target-q).abs().mean(0),
             "command_outside_physical_limits_fraction": outside.float().mean(0),
+            "requested_outside_physical_limits_fraction": requested_outside.float().mean(0),
             "near_physical_limit_fraction": near.float().mean(0)}
 
 
@@ -52,7 +55,8 @@ class JointDiagnostics:
         q = env._engine.get_dof_pos(self.char)[ids]
         velocity = env._engine.get_dof_vel(self.char)[ids]
         # CharEnv sends these expanded action bounds directly as position-PD targets.
-        target = action.clamp(env._action_bound_low, env._action_bound_high)[ids]
+        requested = action.clamp(env._action_bound_low, env._action_bound_high)[ids]
+        target = env._clip_action(action)[ids]
         rotation = env._engine.get_root_rot(self.char)[ids]
         up = torch.zeros(len(ids), 3, device=q.device)
         up[:, 2] = 1
@@ -63,14 +67,14 @@ class JointDiagnostics:
             env._engine.get_root_pos(self.char)[ids, 2],
             env._engine.get_body_pos(self.char)[ids, self.head, 2], up_z,
             ground.abs().flatten(1).amax(1), launches[ids].float()], dim=1)
-        for tensor in (state, q, velocity, target):
+        for tensor in (state, q, velocity, target, requested):
             if not bool(torch.isfinite(tensor).all()):
                 raise RuntimeError("Non-finite joint/geometry trace; inspect console.txt.")
-        self.batches.append(tuple(t.detach().cpu().clone() for t in (state, q, velocity, target)))
+        self.batches.append(tuple(t.detach().cpu().clone() for t in (state, q, velocity, target, requested)))
 
     def save(self, out):
         out = Path(out)
-        state, q, velocity, target = [torch.cat([b[i] for b in self.batches]) for i in range(4)]
+        state, q, velocity, target, requested = [torch.cat([b[i] for b in self.batches]) for i in range(5)]
         partitions = {"all": torch.ones(len(state), dtype=torch.bool),
                       "before_first_launch": state[:, 6] == 0,
                       "after_first_launch": state[:, 6] > 0}
@@ -85,7 +89,7 @@ class JointDiagnostics:
             if not bool(mask.any()):
                 continue
             s = state[mask]
-            stats = joint_statistics(q[mask], velocity[mask], target[mask], self.low, self.high)
+            stats = joint_statistics(q[mask], velocity[mask], target[mask], self.low, self.high, requested[mask])
             target_rate = temporal_target_rate(s, target[mask])
             joints = [{"joint": joint, "physical_lower": float(self.low[i]), "physical_upper": float(self.high[i]),
                        "mean_abs_target_rate_rad_s": float(target_rate[i]) if target_rate is not None else None,
@@ -98,7 +102,7 @@ class JointDiagnostics:
                 "nonfoot_contact_fraction": float((s[:, 5] > 0.1).float().mean())}
             result["partitions"][name] = {"geometry": geometry, "joints": joints}
             text.append("\n" + name + ": " + json.dumps(geometry))
-            text.append("leg_joint | actual_min/max_rad | target_rate_rad/s | velocity_rad/s | tracking_error_rad | target_outside_% | near_limit_%")
+            text.append("leg_joint | actual_min/max_rad | target_rate_rad/s | velocity_rad/s | tracking_error_rad | target_outside_% | near_limit_% | requested_outside_%")
             for row in joints:
                 if any(key in row["joint"] for key in ("hip", "knee", "ankle")):
                     rate = row["mean_abs_target_rate_rad_s"]
@@ -107,7 +111,8 @@ class JointDiagnostics:
                         f"{rate_text} | {row['mean_abs_velocity']:.3f} | "
                         f"{row['mean_abs_tracking_error']:.3f} | "
                         f"{100*row['command_outside_physical_limits_fraction']:.1f} | "
-                        f"{100*row['near_physical_limit_fraction']:.1f}")
+                        f"{100*row['near_physical_limit_fraction']:.1f} | "
+                        f"{100*row['requested_outside_physical_limits_fraction']:.1f}")
         with (out / "state_trace.csv").open("w", newline="", encoding="utf-8") as stream:
             writer = csv.writer(stream)
             writer.writerow(["env_id", "time_seconds", "root_height", "head_height", "root_up_z",
@@ -116,10 +121,10 @@ class JointDiagnostics:
         with (out / "joint_trace.csv").open("w", newline="", encoding="utf-8") as stream:
             writer = csv.writer(stream)
             writer.writerow(["env_id", "time_seconds", "launches", "joint", "actual_rad", "target_rad",
-                             "velocity_rad_s", "physical_lower", "physical_upper"])
-            for s, qs, vs, ts in zip(state.tolist(), q.tolist(), velocity.tolist(), target.tolist()):
+                             "velocity_rad_s", "physical_lower", "physical_upper", "requested_rad"])
+            for s, qs, vs, ts, rs in zip(state.tolist(), q.tolist(), velocity.tolist(), target.tolist(), requested.tolist()):
                 writer.writerows([int(s[0]), s[1], int(s[6]), joint, qs[i], ts[i], vs[i],
-                                  float(self.low[i]), float(self.high[i])] for i, joint in enumerate(self.names))
+                                  float(self.low[i]), float(self.high[i]), rs[i]] for i, joint in enumerate(self.names))
         (out / "diagnostics.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         (out / "diagnostics.txt").write_text("\n".join(text) + "\n", encoding="utf-8")
         return {name: data["geometry"] for name, data in result["partitions"].items()}

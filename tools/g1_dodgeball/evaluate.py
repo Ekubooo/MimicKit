@@ -38,7 +38,10 @@ def run(args, out):
     env_cfg = saved_config("env_config.yaml", ENV)
     engine_cfg = saved_config("engine_config.yaml", ENGINE)
     agent_cfg = saved_config("agent_config.yaml", AGENT)
-    if env_cfg != read_yaml(ENV) or engine_cfg != read_yaml(ENGINE):
+    expected_env = read_yaml(ENV)
+    if agent_cfg["agent_name"] == "SMPG1Dodgeball":
+        expected_env["clip_position_targets_to_physical_limits"] = True
+    if env_cfg != expected_env or engine_cfg != read_yaml(ENGINE):
         raise ValueError("Saved policy environment/engine differs from this preset; inspect before evaluating.")
     env_cfg["rand_reset"] = args.init != "starts"
     if args.projectiles == "off":
