@@ -39,7 +39,10 @@ def run(args, out):
     engine_cfg = saved_config("engine_config.yaml", ENGINE)
     agent_cfg = saved_config("agent_config.yaml", AGENT)
     expected_env = read_yaml(ENV)
-    if agent_cfg["agent_name"] == "SMPG1Dodgeball":
+    if env_cfg.get("dodge_reward_mode") == "paper_v3":
+        from tools.g1_dodgeball.limit_training import build_configs
+        expected_env, _ = build_configs()
+    elif agent_cfg["agent_name"] == "SMPG1Dodgeball":
         expected_env["clip_position_targets_to_physical_limits"] = True
     if env_cfg != expected_env or engine_cfg != read_yaml(ENGINE):
         raise ValueError("Saved policy environment/engine differs from this preset; inspect before evaluating.")

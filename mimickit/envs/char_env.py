@@ -20,6 +20,12 @@ class CharEnv(sim_env.SimEnv):
         self._root_height_obs = env_config.get("root_height_obs", True)
         self._zero_center_action = env_config.get("zero_center_action", False)
         self._clip_position_targets_to_physical_limits = env_config.get("clip_position_targets_to_physical_limits", False)
+        self._position_target_margin = float(env_config.get("position_target_margin_rad", 0.0))
+        self._position_target_lower_overrides = env_config.get("position_target_lower_overrides", {})
+        if not np.isfinite(self._position_target_margin) or self._position_target_margin < 0:
+            raise ValueError("Position-target margin must be finite and nonnegative.")
+        if (self._position_target_margin or self._position_target_lower_overrides) and not self._clip_position_targets_to_physical_limits:
+            raise ValueError("Target margins/overrides require physical position-target clipping.")
         
         super().__init__(env_config=env_config, engine_config=engine_config,
                          num_envs=num_envs, device=device, visualize=visualize, 
@@ -124,6 +130,21 @@ class CharEnv(sim_env.SimEnv):
             low, high = self._engine.get_obj_dof_limits(0, self._get_char_id())
             self._physical_target_low = torch.as_tensor(low, device=self._device)
             self._physical_target_high = torch.as_tensor(high, device=self._device)
+            self._physical_target_low = self._physical_target_low.clone() + self._position_target_margin
+            self._physical_target_high = self._physical_target_high.clone() - self._position_target_margin
+            joints = {self._kin_char_model.get_joint(i).name: self._kin_char_model.get_joint(i)
+                      for i in range(1, self._kin_char_model.get_num_joints())}
+            for name, value in self._position_target_lower_overrides.items():
+                if name not in joints or joints[name].get_dof_dim() != 1:
+                    raise ValueError(f"Unknown/non-scalar target override: {name}")
+                index = joints[name].dof_idx
+                if not np.isfinite(value) or value < float(self._physical_target_low[index]):
+                    raise ValueError(f"Target override must tighten the lower limit: {name}")
+                self._physical_target_low[index] = value
+            if not bool(torch.isfinite(self._physical_target_low).all()
+                        & torch.isfinite(self._physical_target_high).all()
+                        & (self._physical_target_low < self._physical_target_high).all()):
+                raise ValueError("Empty/non-finite position-target interval.")
         
         key_bodies = env_config.get("key_bodies", [])
         self._key_body_ids = self._build_body_ids_tensor(key_bodies)

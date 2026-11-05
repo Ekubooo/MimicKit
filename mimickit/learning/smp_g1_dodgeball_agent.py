@@ -46,7 +46,8 @@ class SMPG1DodgeballAgent(SMPAgent):
         obs = self._obs_norm.normalize(batch["obs"][(batch["rand_action_mask"] == 1.0)])
         distribution = self._model.eval_actor(obs)
         target = self._a_norm.unnormalize(distribution.mode)
-        penalty = physical_target_loss(target, self._physical_lower, self._physical_upper, self._physical_target_scale)
+        penalty = physical_target_loss(target, self._env._physical_target_low,
+                                       self._env._physical_target_high, self._physical_target_scale)
         info["actor_loss"] = info["actor_loss"] + self._physical_target_weight * penalty
         info["physical_target_loss"] = penalty.detach()
         return info
@@ -63,5 +64,6 @@ class SMPG1DodgeballAgent(SMPAgent):
         reward = self._exp_buffer.get_data_flat("reward")
         self._exp_buffer.set_data_flat("reward", reward - self._limit_pressure_weight * cost)
         info["g1_limit_pressure_mean"] = cost.mean()
-        info["g1_limit_pressure_weighted_mean"] = self._limit_pressure_weight * cost.mean()
+        # Keep below the legacy text logger's 25-character column width.
+        info["g1_pressure_cost"] = self._limit_pressure_weight * cost.mean()
         return info
