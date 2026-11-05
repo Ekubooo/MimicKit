@@ -70,6 +70,10 @@ def run(args, out):
             from tools.g1_dodgeball.joint_diagnostics import JointDiagnostics
             diagnostics = JointDiagnostics(env)
         n, char, dt = args.episodes, env._get_char_id(), env._engine.get_timestep()
+        probe = None
+        if getattr(args, "control_probe", None):
+            from tools.g1_dodgeball.control_probe import ControlProbe
+            probe = ControlProbe(env, args.control_probe, out)
         seen = torch.zeros(n, dtype=torch.bool, device=args.device)
         returns = torch.zeros(n, device=args.device)
         launches = torch.zeros(n, dtype=torch.long, device=args.device)
@@ -79,7 +83,11 @@ def run(args, out):
             active = ~seen
             trigger_before = env._proj_trigger_times.clone()
             action, _ = agent._decide_action(obs, info)
+            if probe is not None:
+                action = probe.before_step(action, active, launches)
             obs, reward, done, info = env.step(action)
+            if probe is not None:
+                probe.after_step(active, done)
             if not bool(torch.isfinite(obs).all() & torch.isfinite(info["disc_obs"]).all() & torch.isfinite(reward).all()):
                 raise RuntimeError("Non-finite policy/prior observations or task rewards.")
             returns += reward * active
@@ -114,6 +122,8 @@ def run(args, out):
             obs, info = env.reset(terminal.nonzero(as_tuple=False).flatten())
         if len(rows) != n:
             raise RuntimeError("Incomplete first-episode evaluation; no completed summary emitted.")
+        if probe is not None:
+            probe_result = probe.save()
         raw, _, smp = score_windows(agent, torch.cat(windows), args.seed + 1000, repeats=2)
         if not bool(torch.isfinite(raw).all() & torch.isfinite(smp).all()):
             raise RuntimeError("Non-finite SDS/reward diagnostic.")
@@ -161,6 +171,8 @@ def run(args, out):
             diagnostic_file.write_text(json.dumps({key: result[key] for key in keys}, indent=2) + "\n\n" +
                                        diagnostic_file.read_text(encoding="utf-8"), encoding="utf-8")
             result["notes"].append("Read diagnostics.txt for per-joint limits/targets/velocities. Geometry flags are not fall ground truth.")
+        if probe is not None:
+            result["control_probe"] = probe_result
         write_json(out / "evaluation.json", result)
         (out / "summary.txt").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print("Completed. Send: " + str(out / "summary.txt"), flush=True)
@@ -177,6 +189,8 @@ def main():
     parser.add_argument("--init", choices=("gsi", "reference", "starts"), default="gsi")
     parser.add_argument("--projectiles", choices=("on", "off"), default="on")
     parser.add_argument("--joint_diagnostics", action="store_true")
+    parser.add_argument("--control_probe", choices=("baseline", "clip", "release"),
+                        help="Diagnostic intervention on a frozen policy; not a repaired policy evaluation.")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=123)
     args = parser.parse_args()
