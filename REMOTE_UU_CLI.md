@@ -13,7 +13,9 @@
 
 目标主机：`DESKTOP-EQ9L7HF`，设备 ID：`aeawvpf46abdkdoi`，GPU：NVIDIA RTX A5000（约 24 GB 显存）。连接后默认进入远端 PowerShell。
 
-已验证连续发送命令、读取主机名和完整 GPU 输出，以及通过 CMD 激活 Conda、运行 Python。通过此通道进行 Git 同步、MimicKit 训练和断线重连尚未实测。
+已验证连续发送命令、读取主机名和完整 GPU 输出，以及通过 CMD 激活 Conda、运行 Python。
+2026-11-05已验证远端 `git pull --ff-only origin main`、真实G1模型/先验加载及192回合控制测试完整完成。
+长训练尚未通过此通道完成；不把测试通过等同于新策略训练成功。
 
 连接注意事项：
 
@@ -35,9 +37,11 @@ echo %CONDA_DEFAULT_ENV%
 python -B -c "import sys; print(sys.executable)"
 ```
 
-预期解释器为 `C:\Users\ClassRoom\miniconda3\envs\mimickit-newton\python.exe`。该环境路径已登记，但其依赖与训练入口仍需在首次正式运行前核实；无需为此执行 `conda init`。
+已核实解释器为 `C:\Users\ClassRoom\miniconda3\envs\mimickit-newton\python.exe`。
+2026-11-05实际版本：Newton 1.0.0、Warp 1.12.0、MuJoCo 3.5.0、MuJoCo-Warp 3.5.0.2、Torch 2.10.0+cu128。
+无需为此执行 `conda init`。
 
-项目目录参考值为 `C:\Project\MimicKit`，使用前确认实际路径。
+项目目录已核实为 `C:\Project\MimicKit`。
 
 ## 3. 本地开发、远端训练
 
@@ -52,7 +56,8 @@ python -B -c "import sys; print(sys.executable)"
 ## 4. 会话与日志限制
 
 - **会话退出：**此前测试均已用 `exit` 结束。嵌套 CMD 中第一次 `exit` 返回 PowerShell，再次 `exit` 才结束远端终端。
-- **连接保留：**UU 提示断开窗口可保留后台会话，并提供 `term -d DEVICE_ID ls --json` 和 `term -d DEVICE_ID attach NAME`。断线后训练是否持续尚未验证，长训练前需确认，或采用经验证的独立进程启动方式。
+- **连接保留：**用户要求无必要时保留UU会话，避免频繁退出/重连。UU提供 `term -d DEVICE_ID ls --json` 和 `term -d DEVICE_ID attach NAME`。
+- **独立进程：**2026-11-05实测：在UU内直接 `Start-Process` 启动的Python测试会随远端终端 `exit` 被结束，不能据此宣称后台独立运行。使用 `Invoke-CimMethod -ClassName Win32_Process -MethodName Create` 经WMI启动，`Win32_ProcessStartup.ShowWindow=0` 隐藏窗口；已通过退出UU后延迟写入完成标记的测试，且以此方式完成了G1六组控制评测。命令明确指定工作目录、解释器、输出目录及stdout/stderr文件；不需要创建计划任务。即使使用独立启动方式，仍按用户要求保留现有UU会话。
 - **长输出：**终端以屏幕重绘方式返回内容，快速滚屏可能遗漏前部。短输出可在 PowerShell 中用 `$gpuOutput = @(nvidia-smi)` 暂存，再按实际行数分段打印；每段读回后再继续。训练日志按需读取尾部、错误段或指标摘要，避免一次打印整个文件。
 - **观察范围：**此通道可操作命令行，不直接提供图形桌面观察；动作质量仍需评测和图像、视频等证据。
 - **监控范围：**可按要求重连查看或跟踪指定训练；聊天结束不代表仍在后台自动监控。
