@@ -27,8 +27,6 @@ def run(args, out):
     from learning import agent_builder
     from learning.base_agent import AgentMode
     from util import mp_util, resource_util, util
-    audit = audit_assets(args.device)
-    check_prior(args.prior_dir, audit)
     folder = Path(args.model_file).parent
     if folder.name == "int_models":
         folder = folder.parent
@@ -38,21 +36,42 @@ def run(args, out):
     env_cfg = saved_config("env_config.yaml", ENV)
     engine_cfg = saved_config("engine_config.yaml", ENGINE)
     agent_cfg = saved_config("agent_config.yaml", AGENT)
+    is_lafan = env_cfg.get("env_name") == "task_dodgeball_g1_lafan"
+    env_type = TaskDodgeballEnv
     expected_env = read_yaml(ENV)
-    if env_cfg.get("dodge_reward_mode") == "paper_v3":
+    if is_lafan:
+        from envs.task_dodgeball_g1_lafan_env import TaskDodgeballG1LafanEnv
+        from tools.g1_dodgeball.lafan import ENV as LAFAN_ENV, AGENT as LAFAN_AGENT
+        env_type = TaskDodgeballG1LafanEnv
+        expected_env = read_yaml(LAFAN_ENV)
+        expected_agent = read_yaml(LAFAN_AGENT)
+        # test_episodes may differ in an explicitly small training smoke.
+        if any(agent_cfg.get(k) != v for k, v in expected_agent.items() if k != "test_episodes"):
+            raise ValueError("Saved LaFAN agent differs from the pinned recipe")
+        if args.prior_dir is not None:
+            raise ValueError("Released LaFAN evaluation uses its pinned original prior, not --prior_dir")
+        if sha256(agent_cfg["smp_prior_model"]) != expected_agent["smp_prior_sha256"]:
+            raise ValueError("Wrong released LaFAN prior")
+        audit = {"representation": "G1 mapped to canonical Humanoid 114/frame",
+                 "prior": "released frozen LaFAN", "bootstrap": "G1 walk/run (reference/starts only)"}
+    elif env_cfg.get("dodge_reward_mode") == "paper_v3":
         from tools.g1_dodgeball.limit_training import build_configs
         expected_env, _ = build_configs()
     elif agent_cfg["agent_name"] == "SMPG1Dodgeball":
         expected_env["clip_position_targets_to_physical_limits"] = True
+    if not is_lafan:
+        audit = audit_assets(args.device)
+        check_prior(args.prior_dir, audit)
     if env_cfg != expected_env or engine_cfg != read_yaml(ENGINE):
         raise ValueError("Saved policy environment/engine differs from this preset; inspect before evaluating.")
     env_cfg["rand_reset"] = args.init != "starts"
     if args.projectiles == "off":
         # Preserve policy input dimensions and physical objects; suppress launches only.
         env_cfg.update(proj_trigger_time_min=1e9, proj_trigger_time_max=1e9)
-    agent_cfg.update(enable_gsi=args.init == "gsi",
-                     smp_prior_cfg=str(Path(args.prior_dir) / "diffusion_config.yaml"),
-                     smp_prior_model=str(Path(args.prior_dir) / "model.pt"))
+    agent_cfg.update(enable_gsi=args.init == "gsi")
+    if not is_lafan:
+        agent_cfg.update(smp_prior_cfg=str(Path(args.prior_dir) / "diffusion_config.yaml"),
+                         smp_prior_model=str(Path(args.prior_dir) / "model.pt"))
     for name, cfg in (("env_config.yaml", env_cfg), ("engine_config.yaml", engine_cfg),
                       ("agent_config.yaml", agent_cfg)):
         (out / name).write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
@@ -61,7 +80,7 @@ def run(args, out):
     started = time.monotonic()
     mp_util.init(0, 1, args.device, 0)
     try:
-        env = resource_util.construct(TaskDodgeballEnv, env_config=env_cfg, engine_config=engine_cfg,
+        env = resource_util.construct(env_type, env_config=env_cfg, engine_config=engine_cfg,
                                       num_envs=args.episodes, device=args.device, visualize=False)
         agent = agent_builder.build_agent(str(out / "agent_config.yaml"), env, args.device)
         agent.load(args.model_file)
@@ -134,9 +153,15 @@ def run(args, out):
         for row in rows:
             mask = ids == row["env_id"]
             row.update(smp_reward_mean=float(smp[mask].mean()), raw_sds_mean=float(raw[mask].mean()))
-        refs = env._compute_disc_obs_demo(torch.arange(2, device=args.device).repeat_interleave(32),
-            torch.linspace(0, 1, 32, device=args.device).repeat(2) * env._motion_lib.get_motion_length(
-                torch.arange(2, device=args.device).repeat_interleave(32)))
+        if is_lafan:
+            frames = env._disc_obs_to_motion_frames(agent._generate_init_states(64))
+            states = {k: v[:, 0] for k, v in env._motion_frames_to_init_states(frames).items()}
+            refs = env._lafan_adapter.observations(states["root_pos"], states["root_rot"], states["root_vel"],
+                states["root_ang_vel"], states["joint_rot"], dt)
+        else:
+            refs = env._compute_disc_obs_demo(torch.arange(2, device=args.device).repeat_interleave(32),
+                torch.linspace(0, 1, 32, device=args.device).repeat(2) * env._motion_lib.get_motion_length(
+                    torch.arange(2, device=args.device).repeat_interleave(32)))
         ref_raw, _, ref_reward = score_windows(agent, refs, args.seed + 2000, repeats=4)
         rows.sort(key=lambda r: r["env_id"])
         with (out / "episodes.csv").open("w", encoding="utf-8", newline="") as stream:
@@ -144,7 +169,8 @@ def run(args, out):
             writer.writeheader()
             writer.writerows(rows)
         result = provenance({"policy": args.model_file, "policy_sha256": sha256(args.model_file),
-            "prior_model_sha256": sha256(Path(args.prior_dir) / "model.pt"),
+            "prior_model_sha256": sha256(agent_cfg["smp_prior_model"]),
+            "reference_score_source": "adapted released LaFAN GSI" if is_lafan else "walk/run motion windows",
             "seed": args.seed, "initialization": args.init, "projectiles": args.projectiles,
             "episodes": n, "parallel_envs": n,
             "mean_episode_seconds": sum(r["episode_seconds"] for r in rows) / n,
@@ -207,7 +233,10 @@ def main():
         if folder.name == "int_models":
             folder = folder.parent
         path = folder / "agent_config.yaml"
-        args.prior_dir = str(Path(read_yaml(path)["smp_prior_cfg"]).parent) if path.is_file() else PRIOR_DIR
+        env_path = folder / "env_config.yaml"
+        is_lafan = env_path.is_file() and read_yaml(env_path).get("env_name") == "task_dodgeball_g1_lafan"
+        if not is_lafan:
+            args.prior_dir = str(Path(read_yaml(path)["smp_prior_cfg"]).parent) if path.is_file() else PRIOR_DIR
     out = Path(args.out_dir)
     if out.exists() and any(out.iterdir()):
         raise FileExistsError(f"Nonempty output directory: {out}")
