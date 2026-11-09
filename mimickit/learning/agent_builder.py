@@ -29,6 +29,9 @@ def build_agent(agent_file, env, device):
     elif (agent_name == "SMPGetup"):
         from learning.smp_getup_agent import SMPGetupAgent
         agent = SMPGetupAgent(config=agent_config, env=env, device=device)
+    elif (agent_name == "SMPG1"):
+        from learning.smp_g1_agent import SMPG1Agent
+        agent = SMPG1Agent(config=agent_config, env=env, device=device)
     elif (agent_name == "SMPG1Dodgeball"):
         from learning.smp_g1_dodgeball_agent import SMPG1DodgeballAgent
         agent = SMPG1DodgeballAgent(config=agent_config, env=env, device=device)

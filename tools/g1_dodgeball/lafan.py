@@ -19,7 +19,7 @@ ENGINE = "data/engines/newton_g1_dodgeball_engine.yaml"
 FULL_SAMPLES = 1_337_065_472
 
 
-def preflight(device, count=1024):
+def preflight(device, count=1024, env_file=ENV, agent_file=AGENT):
     import torch
     from anim.mjcf_char_model import MJCFCharModel
     from envs.g1_lafan_adapter import G1LafanAdapter
@@ -28,7 +28,7 @@ def preflight(device, count=1024):
     from envs.smp_env import SMPEnv
     from types import SimpleNamespace
     torch.manual_seed(123)
-    a = read_yaml(AGENT)
+    a = read_yaml(agent_file)
     if sha256(a["smp_prior_model"]) != a["smp_prior_sha256"]:
         raise ValueError("Wrong released LaFAN prior")
     cfg = read_yaml(a["smp_prior_cfg"])
@@ -38,7 +38,7 @@ def preflight(device, count=1024):
     prior.load_state_dict(state, strict=True)
     prior.requires_grad_(False)
     g = MJCFCharModel(device)
-    g.load(read_yaml(ENV)["char_file"])
+    g.load(read_yaml(env_file)["char_file"])
     adapter = G1LafanAdapter(g, device)
     with torch.no_grad():
         samples = []
@@ -82,7 +82,15 @@ def preflight(device, count=1024):
     return report
 
 
-def main():
+def main(task="dodgeball"):
+    if task == "dodgeball":
+        env_file, agent_file, full_samples = ENV, AGENT, FULL_SAMPLES
+    elif task == "steering":
+        env_file = "data/envs/smp_steering_g1_lafan_env.yaml"
+        agent_file = "data/agents/smp_steering_g1_lafan_agent.yaml"
+        full_samples = 2_267_676_672  # Published Steering log: 4096 * 32 * 17301.
+    else:
+        raise ValueError(f"Unknown G1 LaFAN task: {task}")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", choices=("preflight", "smoke", "full"), required=True)
     parser.add_argument("--out_dir", required=True)
@@ -93,16 +101,16 @@ def main():
     os.chdir(ROOT)
     out = Path(args.out_dir)
     n = 8 if args.stage == "smoke" else args.num_envs
-    samples = n*32*3 if args.stage == "smoke" else FULL_SAMPLES
-    agent = read_yaml(AGENT)
+    samples = n*32*3 if args.stage == "smoke" else full_samples
+    agent = read_yaml(agent_file)
     if args.stage == "smoke":
         agent["test_episodes"] = 0
     command = [sys.executable, "-u", "-B", "mimickit/run.py", "--mode", "train", "--devices", "cuda:0",
-               "--visualize", "false", "--env_config", ENV, "--engine_config", ENGINE,
+               "--visualize", "false", "--env_config", env_file, "--engine_config", ENGINE,
                "--agent_config", str(out/"agent_runtime.yaml"), "--num_envs", str(n),
                "--max_samples", str(samples), "--rand_seed", "123", "--out_dir", str(out),
                "--save_int_models", "true", "--logger", "txt"]
-    plan = {"recipe": "g1_released_lafan_v1", "stage": args.stage, "num_envs": n,
+    plan = {"recipe": "g1_released_lafan_v1", "task": task, "stage": args.stage, "num_envs": n,
             "max_samples": samples, "updates": samples//(n*32), "command": command,
             "initialization": "fresh RL; released frozen LaFAN; adapted GSI",
             "control_deviations": ["G1/Newton", "bounded PD targets and actor target penalty"],
@@ -114,7 +122,7 @@ def main():
         raise FileExistsError(f"Refusing to overwrite {out}")
     out.mkdir(parents=True, exist_ok=True)
     if args.stage == "preflight":
-        result = preflight("cuda:0")
+        result = preflight("cuda:0", env_file=env_file, agent_file=agent_file)
         write_json(out/"preflight.json", result)
         print(json.dumps(result, indent=2))
         return 0
@@ -127,7 +135,7 @@ def main():
     bootstrap = prepare_motions()
     (out/"agent_runtime.yaml").write_text(yaml.safe_dump(agent, sort_keys=False), encoding="utf-8")
     manifest = provenance({**plan, "status": "running", "construction_bootstrap": bootstrap,
-                           "asset_sha256": {p: sha256(p) for p in (ENV, AGENT, ENGINE,
+                           "asset_sha256": {p: sha256(p) for p in (env_file, agent_file, ENGINE,
                                "data/assets/g1/g1.xml", "data/assets/humanoid/humanoid.xml")}})
     write_json(out/"run_manifest.json", manifest)
     try:

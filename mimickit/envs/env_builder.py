@@ -39,6 +39,9 @@ def build_env(env_file, engine_file, num_envs, device, visualize, record_video=F
     elif (env_name == "task_location"):
         import envs.task_location_env as task_location_env
         env = resource_util.construct(task_location_env.TaskLocationEnv, env_config=env_config, engine_config=engine_config, num_envs=num_envs, device=device, visualize=visualize, record_video=record_video)
+    elif (env_name == "task_steering_g1_lafan"):
+        from envs.task_steering_g1_lafan_env import TaskSteeringG1LafanEnv
+        env = resource_util.construct(TaskSteeringG1LafanEnv, env_config=env_config, engine_config=engine_config, num_envs=num_envs, device=device, visualize=visualize, record_video=record_video)
     elif (env_name == "task_steering"):
         import envs.task_steering_env as task_steering_env
         env = resource_util.construct(task_steering_env.TaskSteeringEnv, env_config=env_config, engine_config=engine_config, num_envs=num_envs, device=device, visualize=visualize, record_video=record_video)
