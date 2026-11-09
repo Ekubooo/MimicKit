@@ -1,5 +1,11 @@
 # SMP 暂停训练后的情况备注
 
+2026-11-09后续状态：G1 LaFAN完整Dodgeball已完成，用户视觉验收尚可。
+当前转向新版Newton 1.7的G1 Steering准备，保留旧Newton后端/Conda环境备用；升级分支已非快进合并且保留。
+本地验证及远端克隆状态见[新版迁移记录](docs/NEWTON_1_7_MIGRATION.md)。
+远端克隆包清单一致，但新路径warp.dll被Windows应用程序控制阻止，尚不能启动新版训练。
+本地commit后等待用户push；之后再拉取、升级新环境并通过运行/负载检查，才启动完整Steering。
+
 2026-11-07后续状态：以下暂停是历史记录，已被用户后续明确指令解除。
 现已授权G1复用作者LaFAN冻结先验的完整Dodgeball RL：4096环境、1,337,065,472 samples。
 本地实现和验证完成后commit，由用户push，再由助手远端拉取启动。

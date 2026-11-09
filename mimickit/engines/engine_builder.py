@@ -7,6 +7,9 @@ import util.resource_util as resource_util
 
 def build_engine(config, num_envs, device, visualize, record_video=False):
     eng_name = config["engine_name"]
+    if eng_name in ("newton", "newton_1_7"):
+        from engines.newton_version import check_newton_version
+        check_newton_version(eng_name)
 
     if (eng_name == "isaac_gym"):
         import engines.isaac_gym_engine as isaac_gym_engine

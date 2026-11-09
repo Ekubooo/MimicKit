@@ -20,6 +20,21 @@ from tools.getup.evaluate_getup import Tee
 from tools.getup.diagnose_getup import score_windows
 
 
+def select_engine_config(saved, backend="saved"):
+    """Allow an explicit cross-version comparison without changing other physics settings."""
+    from tools.g1_dodgeball.lafan import ENGINES
+    saved_name = saved.get("engine_name")
+    if saved_name not in ENGINES or saved != read_yaml(ENGINES[saved_name]):
+        raise ValueError("Saved engine differs from the verified G1 presets.")
+    if backend == "saved":
+        return saved.copy()
+    selected = read_yaml(ENGINES[backend])
+    if {k: v for k, v in selected.items() if k != "engine_name"} != {
+            k: v for k, v in saved.items() if k != "engine_name"}:
+        raise ValueError("Cross-version evaluation must preserve all other engine settings.")
+    return selected
+
+
 @torch.no_grad()
 def run(args, out):
     from envs.task_dodgeball_env import TaskDodgeballEnv, compute_dodgeball_fail_flags
@@ -35,6 +50,10 @@ def run(args, out):
         return read_yaml(p if p.is_file() else fallback)
     env_cfg = saved_config("env_config.yaml", ENV)
     engine_cfg = saved_config("engine_config.yaml", ENGINE)
+    saved_engine = engine_cfg["engine_name"]
+    engine_cfg = select_engine_config(engine_cfg, getattr(args, "engine", "saved"))
+    from engines.newton_version import check_newton_version
+    check_newton_version(engine_cfg["engine_name"])
     agent_cfg = saved_config("agent_config.yaml", AGENT)
     is_lafan = env_cfg.get("env_name") == "task_dodgeball_g1_lafan"
     env_type = TaskDodgeballEnv
@@ -62,7 +81,7 @@ def run(args, out):
     if not is_lafan:
         audit = audit_assets(args.device)
         check_prior(args.prior_dir, audit)
-    if env_cfg != expected_env or engine_cfg != read_yaml(ENGINE):
+    if env_cfg != expected_env:
         raise ValueError("Saved policy environment/engine differs from this preset; inspect before evaluating.")
     env_cfg["rand_reset"] = args.init != "starts"
     if args.projectiles == "off":
@@ -169,6 +188,7 @@ def run(args, out):
             writer.writeheader()
             writer.writerows(rows)
         result = provenance({"policy": args.model_file, "policy_sha256": sha256(args.model_file),
+            "saved_engine": saved_engine, "evaluation_engine": engine_cfg["engine_name"],
             "prior_model_sha256": sha256(agent_cfg["smp_prior_model"]),
             "reference_score_source": "adapted released LaFAN GSI" if is_lafan else "walk/run motion windows",
             "seed": args.seed, "initialization": args.init, "projectiles": args.projectiles,
@@ -214,6 +234,8 @@ def main():
     parser.add_argument("--model_file", required=True)
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--prior_dir")
+    parser.add_argument("--engine", choices=("saved", "newton", "newton_1_7"), default="saved",
+                        help="Default preserves the saved backend; override explicitly for migration evaluation.")
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--init", choices=("gsi", "reference", "starts"), default="gsi")
     parser.add_argument("--projectiles", choices=("on", "off"), default="on")

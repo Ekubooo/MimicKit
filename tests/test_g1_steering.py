@@ -44,11 +44,23 @@ class SteeringContracts(unittest.TestCase):
             ], cwd=ROOT, capture_output=True, text=True, check=True)
             plan = json.loads(result.stdout)
             self.assertEqual(plan["task"], "steering")
+            self.assertEqual(plan["engine"], "newton_1_7")
+            self.assertIn("data/engines/newton_1_7_g1_dodgeball_engine.yaml", plan["command"])
             self.assertEqual(plan["updates"], updates)
             self.assertEqual(plan["max_samples"], published_samples)
             self.assertEqual(n * 32 * updates, published_samples)
             self.assertNotIn("--model_file", plan["command"])
             self.assertIn("data/envs/smp_steering_g1_lafan_env.yaml", plan["command"])
+
+    def test_explicit_legacy_training_remains_available(self):
+        result = subprocess.run([
+            sys.executable, "-B", "-m", "tools.g1_steering.workflow", "--stage", "full",
+            "--engine", "newton", "--out_dir", "output/steering_dry_run", "--dry_run",
+        ], cwd=ROOT, capture_output=True, text=True, check=True)
+        plan = json.loads(result.stdout)
+        self.assertEqual(plan["engine"], "newton")
+        self.assertEqual(plan["max_samples"], 2267676672)
+        self.assertIn("data/engines/newton_g1_dodgeball_engine.yaml", plan["command"])
 
 
 if __name__ == "__main__":

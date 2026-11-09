@@ -77,7 +77,7 @@ class CharEnv(sim_env.SimEnv):
     def _build_env(self, env_id, env_config):
         char_col = self._get_char_color()
         # Preserve the G1 mesh's authored black/gray colors in Newton's GL viewer.
-        if (self._engine.get_name() == "newton"
+        if (self._engine.get_name() in ("newton", "newton_1_7")
                 and os.path.normcase(os.path.abspath(env_config["char_file"]))
                 == os.path.normcase(os.path.abspath("data/assets/g1/g1.xml"))):
             char_col = None
