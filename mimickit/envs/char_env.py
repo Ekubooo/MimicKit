@@ -408,7 +408,7 @@ class CharEnv(sim_env.SimEnv):
         engine_name = self._engine.get_name()
         if (engine_name == "isaac_lab"):
             col = np.array([0.2, 0.25, 0.7])
-        elif (engine_name == "newton"):
+        elif (engine_name in ("newton", "newton_1_7")):
             col = np.array([0.35, 0.45, 0.7])
         else:
             col = np.array([0.5, 0.65, 0.95])
