@@ -91,13 +91,17 @@ def main(task="dodgeball"):
         env_file = "data/envs/smp_steering_g1_lafan_env.yaml"
         agent_file = "data/agents/smp_steering_g1_lafan_agent.yaml"
         full_samples = 2_267_676_672  # Published Steering log: 4096 * 32 * 17301.
+    elif task == "location":
+        env_file = "data/envs/smp_location_g1_lafan_env.yaml"
+        agent_file = "data/agents/smp_location_g1_lafan_agent.yaml"
+        full_samples = 2_280_783_872  # Published Location log: 4096 * 32 * 17401.
     else:
         raise ValueError(f"Unknown G1 LaFAN task: {task}")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", choices=("preflight", "smoke", "full"), required=True)
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--engine", choices=tuple(ENGINES),
-                        default="newton_1_7" if task == "steering" else "newton",
+                        default="newton_1_7" if task in ("steering", "location") else "newton",
                         help="Select the backend and run in its matching Conda environment.")
     parser.add_argument("--num_envs", type=int, choices=(2048, 4096), default=4096,
                         help="Full run only; 2048 is the resource fallback, same total samples")

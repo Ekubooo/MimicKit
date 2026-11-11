@@ -36,6 +36,9 @@ def build_env(env_file, engine_file, num_envs, device, visualize, record_video=F
     elif (env_name == "view_motion"):
         import envs.view_motion_env as view_motion_env
         env = resource_util.construct(view_motion_env.ViewMotionEnv, env_config=env_config, engine_config=engine_config, num_envs=num_envs, device=device, visualize=visualize)
+    elif (env_name == "task_location_g1_lafan"):
+        from envs.task_location_g1_lafan_env import TaskLocationG1LafanEnv
+        env = resource_util.construct(TaskLocationG1LafanEnv, env_config=env_config, engine_config=engine_config, num_envs=num_envs, device=device, visualize=visualize, record_video=record_video)
     elif (env_name == "task_location"):
         import envs.task_location_env as task_location_env
         env = resource_util.construct(task_location_env.TaskLocationEnv, env_config=env_config, engine_config=engine_config, num_envs=num_envs, device=device, visualize=visualize, record_video=record_video)
