@@ -20,9 +20,22 @@ from learning.base_agent import AgentMode
 from learning.smp_agent import SMPAgent
 from learning.smp_getup_agent import SMPGetupAgent
 from tools.getup.common import FULL_SAMPLES
+from tools.getup.train_getup import resolve_budget
 
 
 class GetupContracts(unittest.TestCase):
+    def test_budget_rounds_up_without_silent_environment_override(self):
+        self.assertEqual(resolve_budget("full", None, None, 32),
+                         (2048, FULL_SAMPLES, FULL_SAMPLES, 15259))
+        self.assertEqual(resolve_budget("pilot", None, None, 32),
+                         (4096, 100000000, 100007936, 763))
+        self.assertEqual(resolve_budget("pilot", 2048, None, 32),
+                         (2048, 100000000, 100007936, 1526))
+        self.assertEqual(resolve_budget("smoke", 16, 1, 32), (16, 1, 512, 1))
+        for envs, samples in [(0, None), (-1, None), (None, 0)]:
+            with self.assertRaises(ValueError):
+                resolve_budget("pilot", envs, samples, 32)
+
     def reward(self, height, velocity, literal=False):
         return compute_getup_reward(torch.tensor(height), torch.tensor(velocity),
                                     1.2, 0.6, 0.25, 6.0, 100.0, literal)
@@ -181,7 +194,8 @@ class GetupNewtonIntegration(unittest.TestCase):
     def setUpClass(cls):
         from envs import env_builder
         cls.env = env_builder.build_env("data/envs/smp_getup_humanoid_env.yaml",
-                                        "data/engines/newton_engine.yaml", 8, "cuda:0", False)
+                                        os.environ.get("MIMICKIT_TEST_ENGINE", "data/engines/newton_engine.yaml"),
+                                        8, "cuda:0", False)
 
     @classmethod
     def tearDownClass(cls):

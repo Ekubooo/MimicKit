@@ -183,6 +183,11 @@ python mimickit/run.py --arg_file args/smp_steering_humanoid_args.txt --engine_c
 
 ## 4. Humanoid Getup：diffusion与RL失败记录
 
+2026-11-13 重新推进：用户授权先用默认 Humanoid / Newton 1.7 排查并短训，保留旧冻结 prior。
+真实站稳轨迹在旧权重下得分低于旧策略贴地轨迹，已准备独立 0.5/0.5 权重实验，原配置保留。
+计划 4096 环境、100,007,936 samples；当前待用户 push 后远端拉取启动，尚未启动短训。
+诊断证据、复现边界和完整命令见 [Getup 新版恢复实验](docs/GETUP_NEWTON17_RECOVERY.md)。
+
 ### 4.1 数据、预算与结果
 
 | 阶段 | 设置/结果 |

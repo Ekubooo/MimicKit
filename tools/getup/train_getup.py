@@ -1,4 +1,4 @@
-"""Run one-update smoke or full Getup RL, with console/runtime capture.
+"""Run smoke, pilot or full Getup RL, with console/runtime capture.
 
 Run from the repository root. The actual training remains in mimickit/run.py.
 """
@@ -19,15 +19,30 @@ from tools.getup.common import (
 import yaml
 
 
+def resolve_budget(stage, num_envs, max_samples, steps_per_iter):
+    defaults = {"smoke": (8, 256), "pilot": (4096, 100_000_000),
+                "full": (2048, FULL_SAMPLES)}
+    default_envs, default_samples = defaults[stage]
+    count = default_envs if num_envs is None else num_envs
+    requested = default_samples if max_samples is None else max_samples
+    if min(count, requested, steps_per_iter) <= 0:
+        raise ValueError("Environment count, sample budget and rollout length must be positive.")
+    rollout = count * steps_per_iter
+    updates = (requested + rollout - 1) // rollout
+    return count, requested, updates * rollout, updates
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", required=True, choices=("smoke", "full"))
+    parser.add_argument("--stage", required=True, choices=("smoke", "pilot", "full"))
     parser.add_argument("--out_dir")
     parser.add_argument("--agent_config", default=AGENT_CONFIG)
     parser.add_argument("--env_config", default=ENV_CONFIG)
     parser.add_argument("--engine_config", default=ENGINE_CONFIG)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--seed", type=int, default=123)
+    parser.add_argument("--num_envs", type=int)
+    parser.add_argument("--max_samples", type=int)
     parser.add_argument("--check_only", action="store_true")
     args = parser.parse_args()
     os.chdir(ROOT)
@@ -36,21 +51,20 @@ def main():
     if not args.device.startswith("cuda") or not torch.cuda.is_available():
         raise RuntimeError("This Newton training preset requires a working CUDA PyTorch installation.")
     gpu = torch.cuda.get_device_name(torch.device(args.device))
-    full = args.stage == "full"
-    count, samples = (2048, FULL_SAMPLES) if full else (8, 256)
-    if agent["steps_per_iter"] != 32:
-        raise ValueError("Preset budget requires steps_per_iter=32.")
-    updates = samples // (count * agent["steps_per_iter"])
+    count, requested, samples, updates = resolve_budget(
+        args.stage, args.num_envs, args.max_samples, agent["steps_per_iter"])
     print(f"PREFLIGHT OK | GPU={gpu} | envs={count} | samples={samples} | updates={updates}", flush=True)
     print(f"Prior: {prior['prior_model']} | sha256={prior['prior_model_sha256']}", flush=True)
     if args.check_only:
         return 0
-    out = Path(args.out_dir or (FULL_OUTPUT if full else SMOKE_OUTPUT))
+    if args.stage == "pilot" and not args.out_dir:
+        parser.error("--stage pilot requires a new --out_dir.")
+    out = Path(args.out_dir or (FULL_OUTPUT if args.stage == "full" else SMOKE_OUTPUT))
     # A new output directory protects previous checkpoints AND partial logs.
     if out.exists() and any(out.iterdir()):
         raise FileExistsError(f"Output directory is not empty: {out}. Choose a new --out_dir.")
     out.mkdir(parents=True, exist_ok=True)
-    if not full:
+    if args.stage == "smoke":
         agent["test_episodes"] = 0  # Plumbing smoke, no policy-quality claim.
     runtime_agent = out / "agent_runtime.yaml"
     runtime_agent.write_text(yaml.safe_dump(agent, sort_keys=False), encoding="utf-8")
@@ -62,8 +76,13 @@ def main():
                "--rand_seed", str(args.seed), "--out_dir", str(out)]
     metadata = provenance({**prior, "stage": args.stage, "gpu": gpu,
                            "num_envs": count, "max_samples": samples, "updates": updates,
+                           "requested_samples": requested,
                            "seed": args.seed, "command": command,
-                           "reward_mode": env["getup_reward_mode"]})
+                           "reward_mode": env["getup_reward_mode"],
+                           "task_reward_weight": agent["task_reward_weight"],
+                           "smp_reward_weight": agent["smp_reward_weight"],
+                           "engine_config": engine,
+                           "initialization": "random_policy_frozen_existing_prior"})
     write_json(out / "run_manifest.json", metadata)
     started = time.monotonic()
     start_stamp = datetime.now().astimezone().isoformat(timespec="seconds")

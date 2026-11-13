@@ -99,6 +99,10 @@ def controls(env):
             torch.tensor([mid], device=device), torch.zeros(1, device=device))
         name = Path(env._motion_lib.get_motion_file(mid)).stem.split("_")[-1]
         result["static_start_" + name] = static(pos, rot, joints).repeat(32, 1)
+        motion_id = torch.tensor([mid], device=device)
+        pos, rot, _, _, joints, _ = env._motion_lib.calc_motion_frame(
+            motion_id, env._motion_lib.get_motion_length(motion_id))
+        result["static_terminal_" + name] = static(pos, rot, joints).repeat(32, 1)
     result["static_standing_init_candidate"] = static(
         env._init_root_pos[None], env._init_root_rot[None],
         env._kin_char_model.dof_to_rot(env._init_dof_pos[None])).repeat(32, 1)

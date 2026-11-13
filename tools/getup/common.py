@@ -33,7 +33,7 @@ def preflight(env_file, agent_file, engine_file):
     env, agent, engine = [read_yaml(p) for p in (env_file, agent_file, engine_file)]
     if env["env_name"] != "task_getup" or agent["agent_name"] != "SMPGetup":
         raise ValueError("Use the dedicated Getup environment and SMPGetup agent.")
-    if engine["engine_name"] != "newton":
+    if engine["engine_name"] not in ("newton", "newton_1_7"):
         raise ValueError("This experiment targets the Newton backend.")
     if agent["enable_gsi"] or env["enable_early_termination"]:
         raise ValueError("Getup requires GSI off and fall termination off.")

@@ -1,5 +1,10 @@
 # SMP 暂停训练后的情况备注
 
+2026-11-13 后续状态：用户已确认 G1 Spinkick 在新版 Newton 上视觉正常。
+现授权先推进默认 Humanoid Getup：旧冻结先验、新版 Newton，诊断后修改并在 main 提交，
+用户 push 后再由助手远端拉取启动短训。此前暂停说明不覆盖本轮明确授权。
+本轮证据与约 1 亿采样短训配置见 [Getup 新版恢复实验](docs/GETUP_NEWTON17_RECOVERY.md)。
+
 2026-11-09后续状态：G1 LaFAN完整Dodgeball已完成，用户视觉验收尚可。
 当前转向新版Newton 1.7的G1 Steering准备，保留旧Newton后端/Conda环境备用；升级分支已非快进合并且保留。
 本地验证及远端克隆状态见[新版迁移记录](docs/NEWTON_1_7_MIGRATION.md)。
