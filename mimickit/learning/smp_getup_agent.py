@@ -1,8 +1,28 @@
 """SMP with train-mode restoration before the caller resets after evaluation."""
+import torch
+from engines.engine import ControlMode
 from learning.smp_agent import SMPAgent
 
 
 class SMPGetupAgent(SMPAgent):
+    def _build_model(self, config):
+        super()._build_model(config)
+        init_pose = config.get("actor_init_pose", "default")
+        if init_pose == "default":
+            return
+        if init_pose != "standing":
+            raise ValueError("actor_init_pose must be default or standing.")
+        if self._env._engine.get_control_mode() not in (ControlMode.pos, ControlMode.pd_explicit):
+            raise ValueError("Standing actor initialization requires position control.")
+        # Only initialize the fresh actor's output bias. Keep the absolute PD
+        # action mapping and checkpoint format unchanged; load() overrides this.
+        target = self._env._init_dof_pos
+        if not torch.isfinite(target).all() or not torch.allclose(self._env._clip_action(target), target):
+            raise ValueError("Standing initialization must be a finite, reachable PD target.")
+        bias = self._model._action_dist._mean_net.bias
+        with torch.no_grad():
+            bias.copy_(self._a_norm.normalize(target).to(bias))
+
     def _load_params(self, config):
         super()._load_params(config)
         # Scope absolute minibatches to Getup; other PPO tasks retain their

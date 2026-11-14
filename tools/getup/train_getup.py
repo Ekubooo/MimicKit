@@ -88,6 +88,11 @@ def main():
                            "actor_batch_samples": min(count * agent["steps_per_iter"], agent.get("actor_batch_samples", int(count * agent["actor_batch_size"]))),
                            "critic_batch_samples": min(count * agent["steps_per_iter"], agent.get("critic_batch_samples", int(count * agent["critic_batch_size"]))),
                            "initialization": "random_policy_frozen_existing_prior"})
+    metadata.update(actor_init_pose=agent.get("actor_init_pose", "default"),
+                    actor_init_output_scale=agent["model"]["actor_init_output_scale"],
+                    action_std=agent["model"]["action_std"],
+                    actor_learning_rate=agent["actor_optimizer"]["learning_rate"],
+                    standing_joint_noise=env.get("getup_standing_joint_noise", 0.0))
     write_json(out / "run_manifest.json", metadata)
     started = time.monotonic()
     start_stamp = datetime.now().astimezone().isoformat(timespec="seconds")

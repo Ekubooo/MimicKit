@@ -27,18 +27,22 @@ def main():
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--num_envs", type=int, choices=(2048, 4096), default=4096)
     parser.add_argument("--max_samples", type=int, default=10_000_000)
+    parser.add_argument("--neutral_init", action="store_true", help="Use standing-biased actor and calibrated low exploration.")
     args = parser.parse_args()
     if args.max_samples <= 0:
         parser.error("--max_samples must be positive.")
     os.chdir(ROOT)
-    evidence = [preflight(ENV, agent, ENGINE)[3] for agent in AGENTS.values()]
+    agents = ({name: path.replace("standing_", "standing_neutral_") for name, path in AGENTS.items()}
+              if args.neutral_init else AGENTS)
+    env = ENV.replace("standing_", "standing_neutral_") if args.neutral_init else ENV
+    evidence = [preflight(env, agent, ENGINE)[3] for agent in agents.values()]
     if evidence[0]["prior_model_sha256"] != evidence[1]["prior_model_sha256"]:
         raise ValueError("Both controls must use the same frozen prior.")
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=False)
     result = {"status": "running", "started": datetime.now().astimezone().isoformat(),
               "prior": evidence[0], "num_envs": args.num_envs,
-              "requested_samples_per_arm": args.max_samples, "arms": {}}
+              "requested_samples_per_arm": args.max_samples, "neutral_init": args.neutral_init, "arms": {}}
     def save():
         write_json(out / "summary.json", result)
     def run(command, log):
@@ -47,17 +51,17 @@ def main():
                            stderr=subprocess.STDOUT, check=True)
     save()
     try:
-        for name, agent in AGENTS.items():
+        for name, agent in agents.items():
             folder = out / name
             run(["tools/getup/train_getup.py", "--stage", "pilot", "--num_envs", str(args.num_envs),
-                 "--max_samples", str(args.max_samples), "--env_config", ENV, "--agent_config", agent,
+                 "--max_samples", str(args.max_samples), "--env_config", env, "--agent_config", agent,
                  "--engine_config", ENGINE, "--out_dir", str(folder)], out / (name + "_train.txt"))
             result["arms"][name] = {}
             save()
             for label, init in (("standing", "standing"), ("late_reference", "reference"), ("fallen_starts", "starts")):
                 dest = folder / ("eval_" + label)
                 command = ["tools/getup/evaluate_getup.py", "--model_file", str(folder / "model.pt"),
-                           "--env_config", ENV, "--agent_config", agent, "--engine_config", ENGINE,
+                           "--env_config", env, "--agent_config", agent, "--engine_config", ENGINE,
                            "--init", init, "--episodes", "100", "--seed", "123", "--out_dir", str(dest)]
                 if init == "reference":
                     command += ["--phase_range", "0.9", "1.0"]

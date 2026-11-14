@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,37 @@ from tools.getup.train_getup import resolve_budget
 
 
 class GetupContracts(unittest.TestCase):
+    def test_standing_actor_bias_preserves_mapping_and_checkpoint_values(self):
+        from engines.engine import ControlMode
+        from learning.normalizer import Normalizer
+        a = SMPGetupAgent.__new__(SMPGetupAgent)
+        torch.nn.Module.__init__(a)
+        target = torch.tensor([0.0, 1.57, -1.57])
+        a._env = SimpleNamespace(_init_dof_pos=target, _clip_action=lambda x: x,
+            _engine=SimpleNamespace(get_control_mode=lambda: ControlMode.pos))
+        a._a_norm = Normalizer((3,), 'cpu', init_mean=torch.tensor([1.4, 0., 0.]),
+                              init_std=torch.tensor([2., 3., 3.]))
+        def build(agent, cfg):
+            agent._model = torch.nn.Module()
+            agent._model._action_dist = torch.nn.Module()
+            agent._model._action_dist._mean_net = torch.nn.Linear(4, 3)
+            torch.nn.init.zeros_(agent._model._action_dist._mean_net.weight)
+            torch.nn.init.zeros_(agent._model._action_dist._mean_net.bias)
+        with patch.object(SMPAgent, '_build_model', build):
+            a._build_model({})
+            torch.testing.assert_close(a._model._action_dist._mean_net.bias, torch.zeros(3))
+            old_state = {k: v.clone() for k,v in a.state_dict().items()}
+            a._build_model({'actor_init_pose': 'standing'})
+            actual = a._a_norm.unnormalize(a._model._action_dist._mean_net(torch.randn(5,4)))
+            torch.testing.assert_close(actual, target.expand(5,-1))
+            a.load_state_dict(old_state)  # Same schema; old checkpoints fully replace the fresh bias.
+            torch.testing.assert_close(a._model._action_dist._mean_net.bias, torch.zeros(3))
+            with self.assertRaises(ValueError):
+                a._build_model({'actor_init_pose': 'unsupported'})
+            a._env._engine.get_control_mode = lambda: ControlMode.torque
+            with self.assertRaises(ValueError):
+                a._build_model({'actor_init_pose': 'standing'})
+
     def test_getup_absolute_minibatches_and_legacy_defaults(self):
         for n in (8, 2048, 4096):
             e = SMPGetupAgent.__new__(SMPGetupAgent)
