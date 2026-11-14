@@ -82,6 +82,11 @@ def main():
                            "task_reward_weight": agent["task_reward_weight"],
                            "smp_reward_weight": agent["smp_reward_weight"],
                            "engine_config": engine,
+                           "train_initialization": env.get("getup_train_init", "reference"),
+                           "test_initialization": env.get("getup_test_init", "starts"),
+                           "reference_phase_range": env.get("getup_reference_phase_range", [0, 1]),
+                           "actor_batch_samples": min(count * agent["steps_per_iter"], agent.get("actor_batch_samples", int(count * agent["actor_batch_size"]))),
+                           "critic_batch_samples": min(count * agent["steps_per_iter"], agent.get("critic_batch_samples", int(count * agent["critic_batch_size"]))),
                            "initialization": "random_policy_frozen_existing_prior"})
     write_json(out / "run_manifest.json", metadata)
     started = time.monotonic()

@@ -85,6 +85,8 @@ def run(args, out, evidence):
                         "motion": Path(env._motion_lib.get_motion_file(mid)).stem,
                         "augmented": bool(info["getup_init_augmented"][index]),
                         "initial_head_height": float(info["getup_init_head_height"][index]),
+                        "initial_phase": float(info["getup_init_phase"][index]),
+                        "standing_initialization": bool(info["getup_init_standing"][index]),
                         "success": bool(info["getup_success"][index]),
                         "end_stable": float(info["getup_hold_seconds"][index]) >= env._hold_target - 1e-5,
                         "best_hold_seconds": float(info["getup_best_hold_seconds"][index]),
@@ -120,6 +122,7 @@ def run(args, out, evidence):
             "policy": args.model_file, "policy_sha256": sha256(args.model_file),
             "seed": args.seed, "initialization": args.init,
             "parallel_envs": args.episodes, "reward_mode": env_config["getup_reward_mode"],
+            "reference_phase_range": env_config.get("getup_reference_phase_range", [0, 1]),
             "success_hold_seconds": env._hold_target,
             "overall": summarize(rows),
             "by_motion": {str(mid): summarize([r for r in rows if r["motion_id"] == mid])
@@ -144,7 +147,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model_file", required=True)
     parser.add_argument("--out_dir", required=True)
-    parser.add_argument("--init", choices=("starts", "augmented", "mixed"), default="starts")
+    parser.add_argument("--init", choices=("starts", "augmented", "mixed", "reference", "standing"), default="starts")
+    parser.add_argument("--phase_range", nargs=2, type=float, help="Reference initialization phase interval in [0,1].")
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--device", default="cuda:0")
@@ -159,6 +163,11 @@ def main():
     if not Path(args.model_file).is_file():
         raise FileNotFoundError(args.model_file)
     evidence = preflight(args.env_config, args.agent_config, args.engine_config)
+    if args.phase_range is not None:
+        low, high = args.phase_range
+        if args.init != "reference" or not 0 <= low <= high <= 1:
+            parser.error("--phase_range requires --init reference and 0 <= low <= high <= 1.")
+        evidence[0]["getup_reference_phase_range"] = args.phase_range
     out = Path(args.out_dir)
     if out.exists() and any(out.iterdir()):
         raise FileExistsError(f"Output directory is not empty: {out}")

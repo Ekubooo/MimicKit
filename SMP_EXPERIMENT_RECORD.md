@@ -183,6 +183,11 @@ python mimickit/run.py --arg_file args/smp_steering_humanoid_args.txt --engine_c
 
 ## 4. Humanoid Getup：diffusion与RL失败记录
 
+2026-11-14：前一轮新版 pilot 实际完成（66min、EXIT0），200 回合评测起身为 0。
+进一步分阶段探针显示从 95% 参考帧或中立站姿开始也不能站稳，准备先做站稳子问题的
+task-only / 冻结 SMP 对照，各约 1000 万 samples。新配置待用户 push 后拉取启动。
+详见 [站稳诊断](docs/GETUP_STANDING_DIAGNOSTIC.md)，原历史配置与结果保留。
+
 2026-11-13 重新推进：用户授权先用默认 Humanoid / Newton 1.7 排查并短训，保留旧冻结 prior。
 真实站稳轨迹在旧权重下得分低于旧策略贴地轨迹，已准备独立 0.5/0.5 权重实验，原配置保留。
 计划 4096 环境、100,007,936 samples；当前待用户 push 后远端拉取启动，尚未启动短训。

@@ -35,11 +35,21 @@ class TaskGetupEnv(smp_env.SMPEnv):
             raise ValueError("Getup baseline does not track a target motion or phase.")
         self._aug_probability = float(env_config.get("augmented_reset_probability", 0.1))
         self._test_init = env_config.get("getup_test_init", "starts")
+        self._train_init = env_config.get("getup_train_init", "reference")
+        self._reference_phase_range = tuple(env_config.get("getup_reference_phase_range", [0.0, 1.0]))
+        self._standing_joint_noise = float(env_config.get("getup_standing_joint_noise", 0.0))
+        if not math.isfinite(self._standing_joint_noise) or self._standing_joint_noise < 0:
+            raise ValueError("getup_standing_joint_noise must be finite and nonnegative.")
+        if self._train_init not in ("reference", "standing"):
+            raise ValueError("getup_train_init must be reference or standing.")
+        if (len(self._reference_phase_range) != 2
+                or not 0 <= self._reference_phase_range[0] <= self._reference_phase_range[1] <= 1):
+            raise ValueError("getup_reference_phase_range must satisfy 0 <= low <= high <= 1.")
         self._reward_mode = env_config.get("getup_reward_mode", "deficit")
         if not 0 <= self._aug_probability <= 1:
             raise ValueError("Invalid augmented_reset_probability.")
-        if self._test_init not in ("starts", "augmented", "mixed"):
-            raise ValueError("getup_test_init must be starts, augmented or mixed.")
+        if self._test_init not in ("starts", "augmented", "mixed", "reference", "standing"):
+            raise ValueError("Invalid getup_test_init.")
         if self._reward_mode not in ("deficit", "paper_literal"):
             raise ValueError("getup_reward_mode must be deficit or paper_literal.")
         self._target_height = float(env_config.get("getup_target_head_height", 1.2))
@@ -76,6 +86,8 @@ class TaskGetupEnv(smp_env.SMPEnv):
             torch.as_tensor(v, device=self._device, dtype=torch.float32)
             for v in self._engine.get_obj_dof_limits(0, self._get_char_id())]
         self._init_augmented = torch.zeros(n, device=self._device, dtype=torch.bool)
+        self._init_static = torch.zeros(n, device=self._device, dtype=torch.bool)
+        self._initial_phase = torch.zeros(n, device=self._device)
         self._height_shift = torch.zeros(n, device=self._device)
         self._hold = torch.zeros(n, device=self._device)
         self._best_hold = torch.zeros(n, device=self._device)
@@ -97,6 +109,8 @@ class TaskGetupEnv(smp_env.SMPEnv):
             "getup_init_augmented": self._init_augmented,
             "getup_init_head_height": self._initial_head,
             "getup_motion_id": self._motion_ids,
+            "getup_init_phase": self._initial_phase,
+            "getup_init_standing": self._init_static,
         })
 
     def set_mode(self, mode):
@@ -111,16 +125,21 @@ class TaskGetupEnv(smp_env.SMPEnv):
             ids = torch.arange(n, device=self._device) % self._motion_lib.get_num_motions()
         else:
             ids = self._motion_lib.sample_motions(n)
-        if self._mode == base_env.EnvMode.TEST and self._test_init != "mixed":
+        if self._mode == base_env.EnvMode.TEST and self._test_init not in ("mixed", "reference"):
             times = torch.zeros(n, device=self._device)
         else:
             times = self._motion_lib.sample_time(ids)
+            low, high = self._reference_phase_range
+            times = low * self._motion_lib.get_motion_length(ids) + (high - low) * times
         return ids, times
 
     def _reset_ref_motion(self, env_ids):
         super()._reset_ref_motion(env_ids)
         n = len(env_ids)
-        if self._mode == base_env.EnvMode.TEST and self._test_init == "starts":
+        standing = (self._train_init == "standing" if self._mode == base_env.EnvMode.TRAIN
+                    else self._test_init == "standing")
+        self._init_static[env_ids] = standing
+        if standing or (self._mode == base_env.EnvMode.TEST and self._test_init in ("starts", "reference")):
             augmented = torch.zeros(n, device=self._device, dtype=torch.bool)
         elif self._mode == base_env.EnvMode.TEST and self._test_init == "augmented":
             augmented = torch.ones(n, device=self._device, dtype=torch.bool)
@@ -129,6 +148,22 @@ class TaskGetupEnv(smp_env.SMPEnv):
         self._init_augmented[env_ids] = augmented
         if augmented.any():
             self._augment_fallen(env_ids[augmented])
+        if standing:
+            self._ref_root_pos[env_ids] = self._init_root_pos
+            self._ref_root_rot[env_ids] = self._init_root_rot
+            self._ref_dof_pos[env_ids] = self._init_dof_pos
+            if self._standing_joint_noise:
+                self._ref_dof_pos[env_ids] = (self._ref_dof_pos[env_ids]
+                    + self._standing_joint_noise * torch.randn_like(self._ref_dof_pos[env_ids])).clamp(self._dof_low, self._dof_high)
+            self._ref_joint_rot[env_ids] = self._kin_char_model.dof_to_rot(self._ref_dof_pos[env_ids])
+            self._ref_root_vel[env_ids] = 0
+            self._ref_root_ang_vel[env_ids] = 0
+            self._ref_dof_vel[env_ids] = 0
+            self._motion_time_offsets[env_ids] = 0
+        self._initial_phase[env_ids] = self._motion_time_offsets[env_ids] / self._motion_lib.get_motion_length(self._motion_ids[env_ids])
+        self._initial_phase[env_ids[augmented]] = -1
+        if standing:
+            self._initial_phase[env_ids] = -1
         # Minimal positive lift for references; augmented poses have already
         # been grounded using collision shapes. Never teleport below the floor.
         pos, rot = self._kin_char_model.forward_kinematics(
@@ -194,7 +229,7 @@ class TaskGetupEnv(smp_env.SMPEnv):
             self._motion_ids[env_ids], self._get_motion_times(env_ids)))
         data[0][..., 2] += self._height_shift[env_ids, None]
         data[6][..., 2] += self._height_shift[env_ids, None, None]
-        mask = self._init_augmented[env_ids]
+        mask = self._init_augmented[env_ids] | self._init_static[env_ids]
         refs = (self._ref_root_pos, self._ref_root_rot, self._ref_root_vel,
                 self._ref_root_ang_vel, self._ref_joint_rot,
                 self._ref_dof_vel, self._ref_body_pos)

@@ -24,6 +24,24 @@ from tools.getup.train_getup import resolve_budget
 
 
 class GetupContracts(unittest.TestCase):
+    def test_getup_absolute_minibatches_and_legacy_defaults(self):
+        for n in (8, 2048, 4096):
+            e = SMPGetupAgent.__new__(SMPGetupAgent)
+            torch.nn.Module.__init__(e)
+            e.get_num_envs = lambda: n
+            def base(agent, cfg):
+                agent._steps_per_iter = 32
+                agent._actor_batch_size = 4
+                agent._critic_batch_size = 2
+            with patch.object(SMPAgent, "_load_params", base):
+                e._load_params({})
+                self.assertEqual(e._actor_batch_size * n, 4 * n)
+                e._load_params({"actor_batch_samples": 4096, "critic_batch_samples": 2048})
+                self.assertEqual(e._actor_batch_size * n, min(4096, n * 32))
+                self.assertEqual(e._critic_batch_size * n, min(2048, n * 32))
+                with self.assertRaises(ValueError):
+                    e._load_params({"actor_batch_samples": 0})
+
     def test_budget_rounds_up_without_silent_environment_override(self):
         self.assertEqual(resolve_budget("full", None, None, 32),
                          (2048, FULL_SAMPLES, FULL_SAMPLES, 15259))
@@ -200,6 +218,51 @@ class GetupNewtonIntegration(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.env.close()
+
+    def test_standing_reset_history_partial_reset_and_physical_hold(self):
+        e = self.env
+        e.set_mode(EnvMode.TEST)
+        e._test_init = "standing"
+        e._standing_joint_noise = 0
+        obs, info = e.reset()
+        self.assertTrue(bool(info["getup_init_standing"].all()))
+        self.assertTrue(bool((info["getup_init_phase"] == -1).all()))
+        hist = e._disc_hist_root_pos.get_all()
+        torch.testing.assert_close(hist[:, 0], hist[:, -1])
+        torch.testing.assert_close(hist[:, -1], e._engine.get_root_pos(e._get_char_id()))
+        for _ in range(180):
+            e.step(e._init_dof_pos[None].expand(e.get_num_envs(), -1))
+        self.assertTrue(bool(e._ever_success.all()))
+        before = e._engine.get_root_pos(e._get_char_id()).clone()
+        e.reset(torch.tensor([1, 3], device=e._device))
+        torch.testing.assert_close(before[[0, 2, 4, 5, 6, 7]], e._engine.get_root_pos(e._get_char_id())[[0, 2, 4, 5, 6, 7]])
+        hist = e._disc_hist_root_pos.get_all()
+        torch.testing.assert_close(hist[[1, 3], 0], hist[[1, 3], -1])
+        self.assertTrue(bool(e._ever_success[[0, 2]].all()))
+        self.assertFalse(bool(e._ever_success[[1, 3]].any()))
+
+    def test_phase_reset_and_standing_training_do_not_leak_into_starts(self):
+        e = self.env
+        old = e._reference_phase_range, e._train_init
+        try:
+            e._reference_phase_range = (.95, .95)
+            e.set_mode(EnvMode.TEST)
+            e._test_init = "reference"
+            e.reset()
+            torch.testing.assert_close(e._initial_phase, torch.full_like(e._initial_phase, .95))
+            self.assertFalse(bool(e._init_augmented.any()))
+            e._train_init = "standing"
+            e.set_mode(EnvMode.TRAIN)
+            e.reset()
+            self.assertTrue(bool(e._init_static.all()))
+            e.set_mode(EnvMode.TEST)
+            e._test_init = "starts"
+            e.reset()
+            self.assertFalse(bool(e._init_static.any()))
+            self.assertTrue(bool((e._initial_phase == 0).all()))
+            self.assertTrue(bool((e._initial_head < .6).all()))
+        finally:
+            e._reference_phase_range, e._train_init = old
 
     def test_augmented_grounding_history_and_partial_resets(self):
         e = self.env
