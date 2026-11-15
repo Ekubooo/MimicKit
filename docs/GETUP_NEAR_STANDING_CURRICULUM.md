@@ -1,5 +1,8 @@
 # 默认 Humanoid 近站立恢复小课程（2026-11-15）
 
+后续状态：首轮因 Critic 数值失稳已停止。课程结构保留；现默认 agent 增加
+Critic 梯度上限 10 和优化器即时有限值检查，见 [诊断与修复](GETUP_CRITIC_STABILITY.md)。
+
 ## 起点和目标
 
 上一轮 `58376be` 的 `output/humanoid_getup_standing_neutral_pair_r01` 已完成：
@@ -66,7 +69,7 @@ Git 不同步这些权重。用户 push 后助手在远端拉取、核对资产�
 
 ```bat
 cd /d C:\Project\MimicKit
-python tools/getup/near_standing_curriculum.py --num_envs 4096 --out_dir output/humanoid_getup_near_curriculum_r01
+python tools/getup/near_standing_curriculum.py --num_envs 4096 --out_dir output/humanoid_getup_near_curriculum_r02
 ```
 
 总状态位于该目录 `summary.json`，每段有 `before/`、`train/`、`after/`，各评测

@@ -97,6 +97,10 @@ def main():
                     actor_init_output_scale=agent["model"]["actor_init_output_scale"],
                     action_std=agent["model"]["action_std"],
                     actor_learning_rate=agent["actor_optimizer"]["learning_rate"],
+                    critic_learning_rate=agent["critic_optimizer"]["learning_rate"],
+                    critic_grad_clip=agent["critic_optimizer"].get("grad_clip", 0.0),
+                    optimizer_finite_checks={name: agent[name+"_optimizer"].get("check_finite", False)
+                                             for name in ("actor", "critic")},
                     standing_joint_noise=env.get("getup_standing_joint_noise", 0.0),
                     standing_root_speed_max=env.get("getup_standing_root_speed_max", 0.0),
                     near_reference_probability=env.get("getup_near_reference_probability", 0.1))

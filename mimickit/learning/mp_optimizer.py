@@ -8,6 +8,8 @@ class MPOptimizer():
     def __init__(self, config, param_list):
         self._param_list = param_list
         self._grad_clip = float(config.get("grad_clip", 0.0))
+        self._check_finite = bool(config.get("check_finite", False))
+        self._label = config.get("label", "optimizer")
         self._optimizer = self._build_optimizer(config, param_list)
         self._steps = 0
         
@@ -18,16 +20,24 @@ class MPOptimizer():
         return
     
     def step(self, loss):
+        if self._check_finite:
+            self._require_finite([loss], "loss before backward")
         self._optimizer.zero_grad()
         loss.backward()
         
         if (mp_util.enable_mp()):
             self._aggregate_mp_grads()
 
+        if self._check_finite:
+            self._require_finite([p.grad for p in self._param_list if p.grad is not None], "gradient before step")
+
         if (self._enable_grad_clip()):
             self._clip_grads(self._grad_clip)
 
         self._optimizer.step()
+
+        if self._check_finite:
+            self._require_finite(self._param_list, "parameter after step")
         
         if (mp_util.enable_mp() and (self.get_steps() % self.CHECK_SYNC_STEPS == 0)):
             assert(self._check_synced()), "Network parameters desynchronized"
@@ -88,5 +98,14 @@ class MPOptimizer():
         return self._grad_clip > 0.0
     
     def _clip_grads(self, max_norm):
-        torch.nn.utils.clip_grad_norm_(self._param_list, max_norm)
+        torch.nn.utils.clip_grad_norm_(self._param_list, max_norm, error_if_nonfinite=self._check_finite)
         return
+
+    def _require_finite(self, tensors, stage):
+        if not tensors:
+            return
+        valid = torch.stack([torch.isfinite(value).all() for value in tensors]).all().to(torch.int32)
+        if mp_util.enable_mp():
+            valid = mp_util.reduce_min(valid)
+        if not bool(valid):
+            raise FloatingPointError(f"{self._label}: nonfinite {stage} at optimizer step {self._steps}")

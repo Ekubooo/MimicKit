@@ -14,7 +14,7 @@ from tools.getup.common import preflight, provenance, read_yaml, sha256, write_j
 
 ENGINE = 'data/engines/newton_1_7_engine.yaml'
 CLEAN_ENV = 'data/envs/smp_getup_humanoid_standing_neutral_env.yaml'
-AGENT = 'data/agents/smp_getup_humanoid_standing_neutral_agent.yaml'
+AGENT = 'data/agents/smp_getup_humanoid_near_agent.yaml'
 SOURCE = 'output/humanoid_getup_standing_neutral_pair_r01/frozen_smp/model.pt'
 STAGES = [f'data/envs/smp_getup_humanoid_near_stage{i}_env.yaml' for i in (1, 2)]
 
@@ -64,6 +64,8 @@ def main():
     agent, prior = evidence[0][1], evidence[0][3]
     if agent['task_reward_weight'] != .5 or agent['smp_reward_weight'] != .5:
         raise ValueError('This curriculum preserves the existing frozen-SMP reward balance.')
+    if not all(agent[name+'_optimizer'].get('check_finite', False) for name in ('actor','critic')):
+        raise ValueError('Near-standing curriculum requires immediate finite optimizer checks.')
     source_hash = verify_source(args.model_file, prior, agent)
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=False)

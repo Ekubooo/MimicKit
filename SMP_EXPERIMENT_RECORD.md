@@ -183,6 +183,11 @@ python mimickit/run.py --arg_file args/smp_steering_humanoid_args.txt --engine_c
 
 ## 4. Humanoid Getup：diffusion与RL失败记录
 
+2026-11-15 数值排障：`42bfb22` 近站立 r01 基线通过，但更新 1 出现 Critic NaN，
+已在 16:27:25 停止。控制数据回放复现 SGD 发散，增加 Critic grad_clip=10 后
+远端 5 次更新保持有限，现准备提交即时异常保护并复跑，详见
+[Critic 诊断](docs/GETUP_CRITIC_STABILITY.md)。
+
 2026-11-15：`58376be` 校准站立两组各 209.7 万 samples 已正常完成，总约 9min。
 干净小扰动站姿均 100/100；参考 90%～100% 分别 9/100、7/100；倒地均 0/100。
 下一轮准备冻结 SMP 站立策略热启动的[近站立课程](docs/GETUP_NEAR_STANDING_CURRICULUM.md)，
