@@ -25,6 +25,30 @@ from tools.getup.train_getup import resolve_budget
 
 
 class GetupContracts(unittest.TestCase):
+    def test_group_signals_follow_collected_labels_across_resets(self):
+        from learning.experience_buffer import ExperienceBuffer
+        a = SMPGetupAgent.__new__(SMPGetupAgent)
+        torch.nn.Module.__init__(a)
+        a._task_reward_weight = a._smp_reward_weight = .5
+        a._exp_buffer = ExperienceBuffer(2, 2, 'cpu')
+        # Each slot changes initialization between frames. A final slot mask
+        # would misattribute two of these four samples.
+        a._exp_buffer.set_data('getup_standing', torch.tensor([[True,False],[False,True]]))
+        a._exp_buffer.set_data('reward', torch.tensor([[1.,.2],[.4,1.]]))
+        def build(agent):
+            agent._exp_buffer.set_data('reward', torch.tensor([[.6,.2],[.3,.7]]))
+            agent._exp_buffer.set_data('adv', torch.tensor([[1.,-1.],[-3.,3.]]))
+            return {'existing': 42}
+        with patch.object(SMPAgent, '_build_train_data', build):
+            info = a._build_train_data()
+        self.assertEqual(info['existing'],42)
+        self.assertEqual(info['getup_rollout_standing_samples'].item(),2)
+        self.assertAlmostEqual(info['getup_rollout_standing_task'].item(),.5)
+        self.assertAlmostEqual(info['getup_rollout_nonstanding_task'].item(),.15)
+        self.assertAlmostEqual(info['getup_rollout_standing_smp'].item(),.15)
+        self.assertEqual(info['getup_rollout_nonstanding_adv'].item(),-2.)
+        self.assertEqual(info['getup_rollout_standing_positive_adv'].item(),1.)
+
     def test_standing_actor_bias_preserves_mapping_and_checkpoint_values(self):
         from engines.engine import ControlMode
         from learning.normalizer import Normalizer

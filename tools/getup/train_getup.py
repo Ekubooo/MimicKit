@@ -94,6 +94,8 @@ def main():
                            "initialization": "warm_start_weights_and_normalizers_fresh_optimizer" if args.model_file else "random_policy_frozen_existing_prior",
                            "source_model": args.model_file, "source_model_sha256": source_hash})
     metadata.update(actor_init_pose=agent.get("actor_init_pose", "default"),
+                    iters_per_output=agent['iters_per_output'],
+                    max_uninterrupted_train_seconds=agent['iters_per_output']*agent['steps_per_iter']/engine['control_freq'],
                     actor_init_output_scale=agent["model"]["actor_init_output_scale"],
                     action_std=agent["model"]["action_std"],
                     actor_learning_rate=agent["actor_optimizer"]["learning_rate"],

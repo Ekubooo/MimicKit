@@ -80,7 +80,8 @@ max_root_distance: 20.0
 getup_train_init: near_standing
 getup_standing_joint_noise: 0.008
 getup_standing_root_speed_max: 0.03
-getup_near_reference_probability: 0.1
+# Balance the already-stable anchor against the harder moving reference starts.
+getup_near_reference_probability: 0.5
 getup_reference_phase_range:
 - 0.97
 - 1.0

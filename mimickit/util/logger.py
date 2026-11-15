@@ -178,7 +178,9 @@ class Logger:
         for key in self.log_headers:
             entry = self.log_current_row[key]
             if (isinstance(entry.val, numbers.Number)):
-                template += "{:<25}"
+                # Width is only a minimum: long metric names/values otherwise
+                # concatenate with the next column and corrupt whitespace parsers.
+                template += "{:<25} "
         return template
 
     def _mp_aggregate(self):

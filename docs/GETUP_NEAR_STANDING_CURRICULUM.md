@@ -1,5 +1,8 @@
 # 默认 Humanoid 近站立恢复小课程（2026-11-15）
 
+当前更新：r02 数值稳定但参考恢复退化。r03 使用 50/50 第一段、20 更新评测间隔，
+默认只执行一段，详见 [恢复退化诊断](GETUP_RECOVERY_REGRESSION.md)。
+
 后续状态：首轮因 Critic 数值失稳已停止。课程结构保留；现默认 agent 增加
 Critic 梯度上限 10 和优化器即时有限值检查，见 [诊断与修复](GETUP_CRITIC_STABILITY.md)。
 
@@ -21,8 +24,8 @@ critic LR=1e-4、actor/critic minibatch=4096/2048 均保留。不增加先验训
 
 | 阶段 | 站姿/参考帧比例 | 站姿关节扰动 std | 站姿水平速度扰动 | 参考帧阶段 |
 |---|---|---|---|---|
-| 1 | 90% / 10% | 0.008rad | 每个水平分量 uniform[-0.03,0.03]m/s | 97%～100% |
-| 2（仅通过门槛才运行） | 75% / 25% | 0.015rad | 每分量 uniform[-0.06,0.06]m/s | 93%～100% |
+| 1（当前 r03） | 50% / 50% | 0.008rad | 每个水平分量 uniform[-0.03,0.03]m/s | 97%～100% |
+| 2（保留的旧配方，当前不启动） | 75% / 25% | 0.015rad | 每分量 uniform[-0.06,0.06]m/s | 93%～100% |
 
 参考帧保留原动作速度，不降低速度或变成静态姿态。站姿支路在重置时获得水平速度
 脉冲，竖直速度和关节速度为零；SMP 历史的旧帧是静止姿态，只有最新帧包含该脉冲，
@@ -30,7 +33,8 @@ critic LR=1e-4、actor/critic minibatch=4096/2048 均保留。不增加先验训
 此分布只影响 TRAIN；TEST 的 standing/reference/starts 明确选择各自初始化，
 不把混合分布成功率当作起身成功率。训练中的定期 test 使用当前阶段的 reference。
 
-每段默认 **4096×32×32=4,194,304 samples**，最多两段 **8,388,608 samples**。
+每段默认 **4096×32×32=4,194,304 samples**，当前默认只跑第一段。
+显式选择两段仍受晋级门槛限制，上限 **8,388,608 samples**，但不属于本轮启动方案。
 CLI 不接受超出该单段上限的预算，2048 回退时仍保持采样上限。不存在自动加训或
 第三段/完整起身启动。预计一段含基线及独立评测约 8～12min，两段约 16～24min，
 参考上一轮实测，启动后再校准。
@@ -69,7 +73,7 @@ Git 不同步这些权重。用户 push 后助手在远端拉取、核对资产�
 
 ```bat
 cd /d C:\Project\MimicKit
-python tools/getup/near_standing_curriculum.py --num_envs 4096 --out_dir output/humanoid_getup_near_curriculum_r02
+python tools/getup/near_standing_curriculum.py --num_envs 4096 --max_stages 1 --out_dir output/humanoid_getup_near_curriculum_r03
 ```
 
 总状态位于该目录 `summary.json`，每段有 `before/`、`train/`、`after/`，各评测

@@ -19,6 +19,16 @@ SOURCE = 'output/humanoid_getup_standing_neutral_pair_r01/frozen_smp/model.pt'
 STAGES = [f'data/envs/smp_getup_humanoid_near_stage{i}_env.yaml' for i in (1, 2)]
 
 
+def validate_rollout_horizon(env, agent, engine):
+    # Periodic evaluation destroys the current simulator state. Allow even
+    # floating-point TIME termination at the frame after episode_length.
+    uninterrupted_steps = agent['iters_per_output'] * agent['steps_per_iter']
+    required_steps = math.ceil(env['episode_length'] * engine['control_freq']) + 1
+    if uninterrupted_steps < required_steps:
+        raise ValueError('Evaluation interval truncates every training episode: '
+                         f'{uninterrupted_steps} steps < {required_steps}.')
+
+
 def advancement_reasons(before, after):
     """Engineering gates on separately labelled tests, not statistical claims."""
     reasons = []
@@ -55,12 +65,14 @@ def main():
     parser.add_argument('--agent_config', default=AGENT)
     parser.add_argument('--num_envs', type=int, choices=(2048, 4096), default=4096)
     parser.add_argument('--max_samples_per_stage', type=int, default=4_194_304)
-    parser.add_argument('--max_stages', type=int, choices=(1, 2), default=2)
+    parser.add_argument('--max_stages', type=int, choices=(1, 2), default=1)
     args = parser.parse_args()
     if not 0 < args.max_samples_per_stage <= 4_194_304:
         parser.error('Each stage is bounded to at most 4,194,304 requested samples.')
     os.chdir(ROOT)
     evidence = [preflight(env, args.agent_config, ENGINE) for env in STAGES]
+    for env_config, agent_config, engine_config, _ in evidence:
+        validate_rollout_horizon(env_config, agent_config, engine_config)
     agent, prior = evidence[0][1], evidence[0][3]
     if agent['task_reward_weight'] != .5 or agent['smp_reward_weight'] != .5:
         raise ValueError('This curriculum preserves the existing frozen-SMP reward balance.')

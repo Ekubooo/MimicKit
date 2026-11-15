@@ -19,7 +19,9 @@ critic_optimizer:
   label: Getup critic
 discount: 0.99
 steps_per_iter: 32
-iters_per_output: 5
+# Evaluation resets the shared simulator. Allow a full 20s training episode
+# between evaluations (20 * 32 / 30 = 21.33s); iteration 0 still evaluates.
+iters_per_output: 20
 test_episodes: 32
 normalizer_samples: 100000000
 use_mixed_precision: false

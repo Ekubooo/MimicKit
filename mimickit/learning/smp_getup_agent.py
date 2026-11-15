@@ -43,8 +43,32 @@ class SMPGetupAgent(SMPAgent):
             return super().test_model(num_episodes)
         finally:
             # BaseAgent.train_model resets immediately after test_model returns.
-            # Ensure that reset uses the 90/10 training distribution, not starts.
+            # Ensure that reset uses the configured training mixture, not starts.
             self.set_mode(previous)
+
+    def _record_data_pre_step(self, obs, info, action, action_info):
+        super()._record_data_pre_step(obs, info, action, action_info)
+        # Record the episode label at collection time: slots may reset during
+        # a rollout, so the environment's final mask cannot label the buffer.
+        self._exp_buffer.record('getup_standing', info['getup_init_standing'])
+
+    def _build_train_data(self):
+        task = self._exp_buffer.get_data_flat('reward').clone()
+        info = super()._build_train_data()
+        combined = self._exp_buffer.get_data_flat('reward')
+        weighted_task = self._task_reward_weight * task
+        weighted_smp = combined - weighted_task
+        standing = self._exp_buffer.get_data_flat('getup_standing').bool()
+        advantage = self._exp_buffer.get_data_flat('adv')
+        for label, mask in [('standing', standing), ('nonstanding', ~standing)]:
+            # Nonstanding also covers fallen/augmented starts in other Getup
+            # configs; only the near-standing curriculum makes it reference-only.
+            prefix = 'getup_rollout_' + label + '_'
+            info[prefix + 'samples'] = mask.sum()
+            for name, value in [('task', weighted_task), ('smp', weighted_smp),
+                                ('adv', advantage), ('positive_adv', (advantage > 0).float())]:
+                info[prefix + name] = value[mask].mean() if mask.any() else value.new_zeros(())
+        return info
 
     def _output_train_model(self, iter, out_model_file, int_out_dir):
         super()._output_train_model(iter, out_model_file, int_out_dir)
