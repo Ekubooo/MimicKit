@@ -183,6 +183,11 @@ python mimickit/run.py --arg_file args/smp_steering_humanoid_args.txt --engine_c
 
 ## 4. Humanoid Getup：diffusion与RL失败记录
 
+2026-11-15：`58376be` 校准站立两组各 209.7 万 samples 已正常完成，总约 9min。
+干净小扰动站姿均 100/100；参考 90%～100% 分别 9/100、7/100；倒地均 0/100。
+下一轮准备冻结 SMP 站立策略热启动的[近站立课程](docs/GETUP_NEAR_STANDING_CURRICULUM.md)，
+最多两段共 8,388,608 samples，不启动完整起身训练。
+
 2026-11-14 后续：站稳 task-only / frozen-SMP 两组各 1009 万 samples 正常结束，
 600 回合仍全部失败。短时 PD 对照发现动作中心会大幅屈膝、原探索噪声破坏站立。
 新增可选中立策略初始化及低噪声诊断配置，详见 [PD 诊断](docs/GETUP_PD_DIAGNOSIS.md)。

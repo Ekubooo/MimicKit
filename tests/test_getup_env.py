@@ -251,6 +251,53 @@ class GetupNewtonIntegration(unittest.TestCase):
     def tearDownClass(cls):
         cls.env.close()
 
+    def test_near_standing_mixture_impulse_history_and_partial_reset(self):
+        e = self.env
+        names = ('_train_init', '_near_reference_probability', '_reference_phase_range',
+                 '_standing_joint_noise', '_standing_root_speed_max')
+        old = {name: getattr(e, name) for name in names}
+        try:
+            e._train_init = 'near_standing'
+            e._near_reference_probability = .5
+            e._reference_phase_range = (.97, 1.)
+            e._standing_joint_noise = .008
+            e._standing_root_speed_max = .03
+            e.set_mode(EnvMode.TRAIN)
+            torch.manual_seed(77)
+            count = 0
+            for _ in range(40):
+                obs, info = e.reset()
+                standing = e._init_static
+                count += int((~standing).sum())
+                self.assertFalse(bool(e._init_augmented.any()))
+                self.assertTrue(bool(torch.isfinite(obs).all()))
+                self.assertTrue(bool((e._initial_phase[standing] == -1).all()))
+                self.assertTrue(bool((e._initial_phase[~standing] >= .97).all()))
+                self.assertTrue(bool((e._initial_phase[~standing] <= 1).all()))
+                velocity = e._engine.get_root_vel(e._get_char_id())
+                self.assertTrue(bool((velocity[standing, :2].abs() <= .030001).all()))
+                torch.testing.assert_close(velocity[standing, 2], torch.zeros_like(velocity[standing, 2]))
+                hist = e._disc_hist_root_vel.get_all()
+                torch.testing.assert_close(hist[standing, :-1], torch.zeros_like(hist[standing, :-1]))
+                torch.testing.assert_close(hist[standing, -1], velocity[standing])
+            self.assertGreater(count, 100)
+            self.assertLess(count, 220)
+            before = e._engine.get_root_vel(e._get_char_id()).clone()
+            e.reset(torch.tensor([1, 3], device=e._device))
+            torch.testing.assert_close(before[[0,2,4,5,6,7]], e._engine.get_root_vel(e._get_char_id())[[0,2,4,5,6,7]])
+            e.set_mode(EnvMode.TEST)
+            e._test_init = 'starts'
+            e.reset()
+            self.assertFalse(bool(e._init_static.any()))
+            self.assertTrue(bool((e._initial_phase == 0).all()))
+            e._test_init = 'reference'
+            e.reset()
+            self.assertFalse(bool(e._init_static.any()))
+            self.assertTrue(bool((e._initial_phase >= .97).all()))
+        finally:
+            for name, value in old.items():
+                setattr(e, name, value)
+
     def test_standing_reset_history_partial_reset_and_physical_hold(self):
         e = self.env
         e.set_mode(EnvMode.TEST)

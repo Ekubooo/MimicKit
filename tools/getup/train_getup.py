@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from tools.getup.common import (
     AGENT_CONFIG, ENGINE_CONFIG, ENV_CONFIG, FULL_OUTPUT, FULL_SAMPLES,
-    SMOKE_OUTPUT, preflight, provenance, write_json,
+    SMOKE_OUTPUT, preflight, provenance, sha256, write_json,
 )
 import yaml
 
@@ -44,9 +44,11 @@ def main():
     parser.add_argument("--num_envs", type=int)
     parser.add_argument("--max_samples", type=int)
     parser.add_argument("--check_only", action="store_true")
+    parser.add_argument("--model_file", help="Warm-start weights and normalizers; optimizer and sample counter start fresh.")
     args = parser.parse_args()
     os.chdir(ROOT)
     env, agent, engine, prior = preflight(args.env_config, args.agent_config, args.engine_config)
+    source_hash = sha256(args.model_file) if args.model_file else None
     import torch
     if not args.device.startswith("cuda") or not torch.cuda.is_available():
         raise RuntimeError("This Newton training preset requires a working CUDA PyTorch installation.")
@@ -74,6 +76,8 @@ def main():
                "--agent_config", str(runtime_agent), "--devices", args.device,
                "--num_envs", str(count), "--max_samples", str(samples),
                "--rand_seed", str(args.seed), "--out_dir", str(out)]
+    if args.model_file:
+        command += ["--model_file", args.model_file]
     metadata = provenance({**prior, "stage": args.stage, "gpu": gpu,
                            "num_envs": count, "max_samples": samples, "updates": updates,
                            "requested_samples": requested,
@@ -87,12 +91,15 @@ def main():
                            "reference_phase_range": env.get("getup_reference_phase_range", [0, 1]),
                            "actor_batch_samples": min(count * agent["steps_per_iter"], agent.get("actor_batch_samples", int(count * agent["actor_batch_size"]))),
                            "critic_batch_samples": min(count * agent["steps_per_iter"], agent.get("critic_batch_samples", int(count * agent["critic_batch_size"]))),
-                           "initialization": "random_policy_frozen_existing_prior"})
+                           "initialization": "warm_start_weights_and_normalizers_fresh_optimizer" if args.model_file else "random_policy_frozen_existing_prior",
+                           "source_model": args.model_file, "source_model_sha256": source_hash})
     metadata.update(actor_init_pose=agent.get("actor_init_pose", "default"),
                     actor_init_output_scale=agent["model"]["actor_init_output_scale"],
                     action_std=agent["model"]["action_std"],
                     actor_learning_rate=agent["actor_optimizer"]["learning_rate"],
-                    standing_joint_noise=env.get("getup_standing_joint_noise", 0.0))
+                    standing_joint_noise=env.get("getup_standing_joint_noise", 0.0),
+                    standing_root_speed_max=env.get("getup_standing_root_speed_max", 0.0),
+                    near_reference_probability=env.get("getup_near_reference_probability", 0.1))
     write_json(out / "run_manifest.json", metadata)
     started = time.monotonic()
     start_stamp = datetime.now().astimezone().isoformat(timespec="seconds")

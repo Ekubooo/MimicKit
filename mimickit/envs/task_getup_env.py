@@ -38,10 +38,16 @@ class TaskGetupEnv(smp_env.SMPEnv):
         self._train_init = env_config.get("getup_train_init", "reference")
         self._reference_phase_range = tuple(env_config.get("getup_reference_phase_range", [0.0, 1.0]))
         self._standing_joint_noise = float(env_config.get("getup_standing_joint_noise", 0.0))
+        self._standing_root_speed_max = float(env_config.get("getup_standing_root_speed_max", 0.0))
+        self._near_reference_probability = float(env_config.get("getup_near_reference_probability", 0.1))
+        if not math.isfinite(self._standing_root_speed_max) or self._standing_root_speed_max < 0:
+            raise ValueError("getup_standing_root_speed_max must be finite and nonnegative.")
+        if not 0 <= self._near_reference_probability <= 1:
+            raise ValueError("getup_near_reference_probability must be in [0,1].")
         if not math.isfinite(self._standing_joint_noise) or self._standing_joint_noise < 0:
             raise ValueError("getup_standing_joint_noise must be finite and nonnegative.")
-        if self._train_init not in ("reference", "standing"):
-            raise ValueError("getup_train_init must be reference or standing.")
+        if self._train_init not in ("reference", "standing", "near_standing"):
+            raise ValueError("getup_train_init must be reference, standing or near_standing.")
         if (len(self._reference_phase_range) != 2
                 or not 0 <= self._reference_phase_range[0] <= self._reference_phase_range[1] <= 1):
             raise ValueError("getup_reference_phase_range must satisfy 0 <= low <= high <= 1.")
@@ -136,10 +142,14 @@ class TaskGetupEnv(smp_env.SMPEnv):
     def _reset_ref_motion(self, env_ids):
         super()._reset_ref_motion(env_ids)
         n = len(env_ids)
-        standing = (self._train_init == "standing" if self._mode == base_env.EnvMode.TRAIN
-                    else self._test_init == "standing")
+        near = self._mode == base_env.EnvMode.TRAIN and self._train_init == "near_standing"
+        if near:
+            standing = torch.rand(n, device=self._device) >= self._near_reference_probability
+        else:
+            standing = torch.full((n,), self._train_init == "standing" if self._mode == base_env.EnvMode.TRAIN
+                                  else self._test_init == "standing", device=self._device, dtype=torch.bool)
         self._init_static[env_ids] = standing
-        if standing or (self._mode == base_env.EnvMode.TEST and self._test_init in ("starts", "reference")):
+        if near or bool(standing.all()) or (self._mode == base_env.EnvMode.TEST and self._test_init in ("starts", "reference")):
             augmented = torch.zeros(n, device=self._device, dtype=torch.bool)
         elif self._mode == base_env.EnvMode.TEST and self._test_init == "augmented":
             augmented = torch.ones(n, device=self._device, dtype=torch.bool)
@@ -148,22 +158,25 @@ class TaskGetupEnv(smp_env.SMPEnv):
         self._init_augmented[env_ids] = augmented
         if augmented.any():
             self._augment_fallen(env_ids[augmented])
-        if standing:
-            self._ref_root_pos[env_ids] = self._init_root_pos
-            self._ref_root_rot[env_ids] = self._init_root_rot
-            self._ref_dof_pos[env_ids] = self._init_dof_pos
+        standing_ids = env_ids[standing]
+        if len(standing_ids):
+            self._ref_root_pos[standing_ids] = self._init_root_pos
+            self._ref_root_rot[standing_ids] = self._init_root_rot
+            self._ref_dof_pos[standing_ids] = self._init_dof_pos
             if self._standing_joint_noise:
-                self._ref_dof_pos[env_ids] = (self._ref_dof_pos[env_ids]
-                    + self._standing_joint_noise * torch.randn_like(self._ref_dof_pos[env_ids])).clamp(self._dof_low, self._dof_high)
-            self._ref_joint_rot[env_ids] = self._kin_char_model.dof_to_rot(self._ref_dof_pos[env_ids])
-            self._ref_root_vel[env_ids] = 0
-            self._ref_root_ang_vel[env_ids] = 0
-            self._ref_dof_vel[env_ids] = 0
-            self._motion_time_offsets[env_ids] = 0
+                self._ref_dof_pos[standing_ids] = (self._ref_dof_pos[standing_ids]
+                    + self._standing_joint_noise * torch.randn_like(self._ref_dof_pos[standing_ids])).clamp(self._dof_low, self._dof_high)
+            self._ref_joint_rot[standing_ids] = self._kin_char_model.dof_to_rot(self._ref_dof_pos[standing_ids])
+            self._ref_root_vel[standing_ids] = 0
+            if self._standing_root_speed_max:
+                self._ref_root_vel[standing_ids, :2] = self._standing_root_speed_max * (
+                    2 * torch.rand(len(standing_ids), 2, device=self._device) - 1)
+            self._ref_root_ang_vel[standing_ids] = 0
+            self._ref_dof_vel[standing_ids] = 0
+            self._motion_time_offsets[standing_ids] = 0
         self._initial_phase[env_ids] = self._motion_time_offsets[env_ids] / self._motion_lib.get_motion_length(self._motion_ids[env_ids])
         self._initial_phase[env_ids[augmented]] = -1
-        if standing:
-            self._initial_phase[env_ids] = -1
+        self._initial_phase[standing_ids] = -1
         # Minimal positive lift for references; augmented poses have already
         # been grounded using collision shapes. Never teleport below the floor.
         pos, rot = self._kin_char_model.forward_kinematics(
@@ -237,6 +250,10 @@ class TaskGetupEnv(smp_env.SMPEnv):
                  "joint_rot", "dof_vel", "body_pos")
         for history, ref, name in zip(data, refs, names):
             history[mask] = ref[env_ids[mask], None]
+            if name == "root_vel":
+                # A horizontal impulse is applied at reset: past frames are
+                # stationary, only the newest frame has the reset velocity.
+                history[self._init_static[env_ids], :-1] = 0
             getattr(self, "_disc_hist_" + name).fill(env_ids, history)
 
     def _reset_envs(self, env_ids):
